@@ -1,0 +1,36 @@
+{
+  "name": "pathfinder",
+  "displayName": "PathFinder",
+  "description": "Right-click a function to see every call path that leads to it.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Visualization", "Debuggers"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "pathfinder.pathFind",
+        "title": "PathFind"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "pathfinder.pathFind",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
