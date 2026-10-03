@@ -13,6 +13,22 @@
       {
         "command": "pathfinder.pathFind",
         "title": "PathFind"
+      },
+      {
+        "command": "pathfind.testGraph",
+        "title": "PathFind: Test Graph"
+      },
+      {
+        "command": "pathfind.testWorkspaceGraph",
+        "title": "PathFind: Test Graph with Workspace Paths"
+      },
+      {
+        "command": "pathfind.testDebugPath",
+        "title": "PathFind: Test Debug Path"
+      },
+      {
+        "command": "pathfind.clearDebugPath",
+        "title": "PathFind: Clear Debug Path"
       }
     ],
     "menus": {
@@ -25,12 +41,19 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "compile": "tsc -p ./ && tsc -p tsconfig.webview.json && npm run build:webview",
+    "watch": "tsc -watch -p ./",
+    "build:webview": "esbuild media/graph.ts --bundle --platform=browser --outfile=out/webview/graph.js",
+    "watch:webview": "npm run build:webview -- --watch",
+    "vscode:prepublish": "npm run compile"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "cytoscape": "^3.34.3"
   }
 }

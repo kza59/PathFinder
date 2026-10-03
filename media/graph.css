@@ -1,0 +1,87 @@
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  background: var(--vscode-editor-background, #1e1e1e);
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+header, footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--vscode-sideBar-background, #252526);
+}
+
+header {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--vscode-panel-border, #454545);
+}
+
+.hint {
+  margin-left: 14px;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+
+button {
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--vscode-button-foreground, #ffffff);
+  background: var(--vscode-button-background, #0e639c);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--vscode-button-hoverBackground, #1177bb);
+}
+
+button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 2px;
+}
+
+main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+#graph {
+  position: absolute;
+  inset: 0;
+}
+
+#empty {
+  position: absolute;
+  inset: 40% 14px auto;
+  text-align: center;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+  pointer-events: none;
+}
+
+footer {
+  flex-wrap: wrap;
+  border-top: 1px solid var(--vscode-panel-border, #454545);
+}
+
+#runtime {
+  color: var(--vscode-debugIcon-startForeground, #89d185);
+}
+
+#selection {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}

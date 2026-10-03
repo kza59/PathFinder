@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 import { buildCallGraph } from './graphBuilder';
+import { registerGraphRendererTestCommands } from './graphRendererTest';
 
 export function activate(context: vscode.ExtensionContext) {
+  registerGraphRendererTestCommands(context);
   const output = vscode.window.createOutputChannel('PathFinder');
 
   context.subscriptions.push(output, vscode.commands.registerCommand('pathfinder.pathFind', async () => {

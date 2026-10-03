@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "lib": ["ES2022", "DOM"],
+    "rootDir": ".",
+    "noEmit": true,
+    "esModuleInterop": true
+  },
+  "include": ["media/**/*.ts"]
+}
