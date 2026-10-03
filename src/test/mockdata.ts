@@ -49,35 +49,43 @@ export const mockGraph: GraphData = {
   edges: [
     {
       from: "function1.py::function1",
-      to: "sum.py::sum"
+      to: "sum.py::sum",
+      lines: []
     },
     {
       from: "function2.py::function2",
-      to: "sum.py::sum"
+      to: "sum.py::sum",
+      lines: []
     },
     {
       from: "function3.py::function3",
-      to: "sum.py::sum"
+      to: "sum.py::sum",
+      lines: []
     },
     {
       from: "function2.py::function2",
-      to: "function1.py::function1"
+      to: "function1.py::function1",
+      lines: []
     },
     {
       from: "function3.py::function3",
-      to: "function1.py::function1"
+      to: "function1.py::function1",
+      lines: []
     },
     {
       from: "function3.py::function3",
-      to: "function2.py::function2"
+      to: "function2.py::function2",
+      lines: []
     },
     {
       from: "main.py::main",
-      to: "function2.py::function2"
+      to: "function2.py::function2",
+      lines: []
     },
     {
       from: "main.py::<module>",
-      to: "main.py::main"
+      to: "main.py::main",
+      lines: []
     }
   ]
 };

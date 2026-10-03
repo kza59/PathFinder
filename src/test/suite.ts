@@ -22,7 +22,7 @@ function log(message: string) {
 function describe(graph: CallGraph | undefined) {
   return {
     nodes: (graph?.nodes.map(n => n.id) ?? []).sort(),
-    edges: (graph?.edges.map(e => `${e.from} -> ${e.to}`) ?? []).sort(),
+    edges: (graph?.edges.map(e => `${e.from} -> ${e.to} @ ${e.lines.join(',')}`) ?? []).sort(),
   };
 }
 
@@ -39,7 +39,7 @@ async function runCase(root: string, c: Case): Promise<boolean> {
   };
   const expected = JSON.stringify({
     nodes: c.nodes.map(abs).sort(),
-    edges: c.edges.map(([f, t]) => `${abs(f)} -> ${abs(t)}`).sort(),
+    edges: c.edges.map(([f, t, lines]) => `${abs(f)} -> ${abs(t)} @ ${lines.join(',')}`).sort(),
   });
   let actual = '';
   const started = Date.now();

@@ -1,33 +1,45 @@
 // Expected call graphs for each fixture folder. Ids are written relative to the fixture folder for
 // readability; suite.ts expands them to the real absolute-path ids before comparing.
 
+/** [caller id, callee id, 1-based lines in the caller's file where the call happens] */
+export type ExpectedEdge = [string, string, number[]];
+
 export interface Case {
   name: string;
   file: string;        // file to "right-click" in
   lineContains: string; // first line containing this text...
   symbol: string;       // ...at the first occurrence of this name on it
   nodes: string[];
-  edges: [string, string][];
+  edges: ExpectedEdge[];
 }
 
-const readmeGraph = (ext: string, extraNodes: string[] = [], extraEdges: [string, string][] = []) => ({
+interface ReadmeLines {
+  f1Sum: number; f2Sum: number; f3Sum: number;
+  f2F1: number; f3F1: number[]; f3F2: number; mainF2: number;
+}
+
+const readmeGraph = (ext: string, l: ReadmeLines, extraNodes: string[] = [], extraEdges: ExpectedEdge[] = []) => ({
   nodes: [`sum.${ext}::sum`, `function1.${ext}::function1`, `function2.${ext}::function2`,
     `function3.${ext}::function3`, `main.${ext}::main`, ...extraNodes],
   edges: [
-    [`function1.${ext}::function1`, `sum.${ext}::sum`],
-    [`function2.${ext}::function2`, `sum.${ext}::sum`],
-    [`function3.${ext}::function3`, `sum.${ext}::sum`],
-    [`function2.${ext}::function2`, `function1.${ext}::function1`],
-    [`function3.${ext}::function3`, `function1.${ext}::function1`],
-    [`function3.${ext}::function3`, `function2.${ext}::function2`],
-    [`main.${ext}::main`, `function2.${ext}::function2`],
+    [`function1.${ext}::function1`, `sum.${ext}::sum`, [l.f1Sum]],
+    [`function2.${ext}::function2`, `sum.${ext}::sum`, [l.f2Sum]],
+    [`function3.${ext}::function3`, `sum.${ext}::sum`, [l.f3Sum]],
+    [`function2.${ext}::function2`, `function1.${ext}::function1`, [l.f2F1]],
+    [`function3.${ext}::function3`, `function1.${ext}::function1`, l.f3F1], // called twice
+    [`function3.${ext}::function3`, `function2.${ext}::function2`, [l.f3F2]],
+    [`main.${ext}::main`, `function2.${ext}::function2`, [l.mainF2]],
     ...extraEdges,
-  ] as [string, string][],
+  ] as ExpectedEdge[],
 });
 
-const pyGraph = readmeGraph('py', ['main.py::<module>'], [['main.py::<module>', 'main.py::main']]);
-const cGraph = readmeGraph('c');
-const cppGraph = readmeGraph('cpp');
+const pyGraph = readmeGraph('py',
+  { f1Sum: 5, f2Sum: 7, f3Sum: 9, f2F1: 6, f3F1: [8, 10], f3F2: 7, mainF2: 5 },
+  ['main.py::<module>'], [['main.py::<module>', 'main.py::main', [9]]]);
+// The C and C++ fixtures are laid out line-for-line the same.
+const cLines: ReadmeLines = { f1Sum: 6, f2Sum: 8, f3Sum: 12, f2F1: 7, f3F1: [11, 13], f3F2: 10, mainF2: 5 };
+const cGraph = readmeGraph('c', cLines);
+const cppGraph = readmeGraph('cpp', cLines);
 
 export const CASES: Record<string, Case[]> = {
   test1: [
@@ -52,22 +64,22 @@ export const CASES: Record<string, Case[]> = {
       nodes: ['animals.py::make_sound', 'animals.py::Dog.speak', 'animals.py::Cat.speak',
         'main.py::dog_owner', 'main.py::cat_owner', 'main.py::main', 'main.py::<module>'],
       edges: [
-        ['animals.py::Dog.speak', 'animals.py::make_sound'],
-        ['animals.py::Cat.speak', 'animals.py::make_sound'],
-        ['main.py::dog_owner', 'animals.py::Dog.speak'],
-        ['main.py::cat_owner', 'animals.py::Cat.speak'],
-        ['main.py::main', 'main.py::dog_owner'],
-        ['main.py::main', 'main.py::cat_owner'],
-        ['main.py::<module>', 'main.py::main'],
+        ['animals.py::Dog.speak', 'animals.py::make_sound', [7]],
+        ['animals.py::Cat.speak', 'animals.py::make_sound', [12]],
+        ['main.py::dog_owner', 'animals.py::Dog.speak', [5]],
+        ['main.py::cat_owner', 'animals.py::Cat.speak', [9]],
+        ['main.py::main', 'main.py::dog_owner', [13]],
+        ['main.py::main', 'main.py::cat_owner', [14]],
+        ['main.py::<module>', 'main.py::main', [18]],
       ],
     },
     {
       name: 'python classes: only Dog.speak callers', file: 'animals.py', lineContains: 'def speak', symbol: 'speak',
       nodes: ['animals.py::Dog.speak', 'main.py::dog_owner', 'main.py::main', 'main.py::<module>'],
       edges: [
-        ['main.py::dog_owner', 'animals.py::Dog.speak'],
-        ['main.py::main', 'main.py::dog_owner'],
-        ['main.py::<module>', 'main.py::main'],
+        ['main.py::dog_owner', 'animals.py::Dog.speak', [5]],
+        ['main.py::main', 'main.py::dog_owner', [13]],
+        ['main.py::<module>', 'main.py::main', [18]],
       ],
     },
   ],
@@ -77,20 +89,20 @@ export const CASES: Record<string, Case[]> = {
       nodes: ['animals.cpp::make_sound', 'animals.cpp::Dog::speak', 'animals.cpp::Cat::speak',
         'main.cpp::dog_owner', 'main.cpp::cat_owner', 'main.cpp::main'],
       edges: [
-        ['animals.cpp::Dog::speak', 'animals.cpp::make_sound'],
-        ['animals.cpp::Cat::speak', 'animals.cpp::make_sound'],
-        ['main.cpp::dog_owner', 'animals.cpp::Dog::speak'],
-        ['main.cpp::cat_owner', 'animals.cpp::Cat::speak'],
-        ['main.cpp::main', 'main.cpp::dog_owner'],
-        ['main.cpp::main', 'main.cpp::cat_owner'],
+        ['animals.cpp::Dog::speak', 'animals.cpp::make_sound', [12]],
+        ['animals.cpp::Cat::speak', 'animals.cpp::make_sound', [17]],
+        ['main.cpp::dog_owner', 'animals.cpp::Dog::speak', [5]],
+        ['main.cpp::cat_owner', 'animals.cpp::Cat::speak', [10]],
+        ['main.cpp::main', 'main.cpp::dog_owner', [15]],
+        ['main.cpp::main', 'main.cpp::cat_owner', [16]],
       ],
     },
     {
       name: 'C++ classes: Dog::speak from its in-class declaration', file: 'animals.hpp', lineContains: 'void speak', symbol: 'speak',
       nodes: ['animals.cpp::Dog::speak', 'main.cpp::dog_owner', 'main.cpp::main'],
       edges: [
-        ['main.cpp::dog_owner', 'animals.cpp::Dog::speak'],
-        ['main.cpp::main', 'main.cpp::dog_owner'],
+        ['main.cpp::dog_owner', 'animals.cpp::Dog::speak', [5]],
+        ['main.cpp::main', 'main.cpp::dog_owner', [15]],
       ],
     },
   ],

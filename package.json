@@ -11,6 +11,7 @@
     "Debuggers"
   ],
   "main": "./out/extension.js",
+  "activationEvents": ["onDebug"],
   "contributes": {
     "commands": [
       {

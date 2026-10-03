@@ -2,10 +2,12 @@ import * as vscode from 'vscode';
 import { buildCallGraph } from './graphBuilder';
 import { registerGraphRendererTestCommands } from './test/graphRendererTest';
 import { PathFindPanel } from './webview/PathFindPanel';
+import { registerDebugTracker } from './debugTracker';
 
 export function activate(context: vscode.ExtensionContext) {
   registerGraphRendererTestCommands(context);
   const output = vscode.window.createOutputChannel('PathFinder');
+  registerDebugTracker(context);
 
   context.subscriptions.push(output, vscode.commands.registerCommand('pathfinder.pathFind', async () => {
     const editor = vscode.window.activeTextEditor;
