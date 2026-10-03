@@ -24,6 +24,7 @@ export interface BuildOptions {
   maxDepth?: number;
   maxNodes?: number;
   token?: vscode.CancellationToken;
+  trace?: (message: string) => void; // logs every language-server answer, for debugging missing callers
 }
 
 const C_LIKE_EXTENSIONS = new Set(['.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx']);
@@ -47,8 +48,8 @@ function inWorkspace(uri: vscode.Uri): boolean {
   return uri.scheme === 'file' && vscode.workspace.getWorkspaceFolder(uri) !== undefined;
 }
 
-function sameItem(a: vscode.CallHierarchyItem, b: vscode.CallHierarchyItem): boolean {
-  return a.uri.toString() === b.uri.toString() && a.selectionRange.start.isEqual(b.selectionRange.start);
+function describeItem(item: vscode.CallHierarchyItem): string {
+  return `${item.name} @ ${path.basename(item.uri.fsPath)}:${item.selectionRange.start.line + 1} (${vscode.SymbolKind[item.kind]})`;
 }
 
 /**
@@ -74,6 +75,8 @@ class GraphBuilder {
   private readonly idByLocation = new Map<string, string>();
   private readonly symbolCache = new Map<string, Promise<vscode.DocumentSymbol[]>>();
 
+  constructor(readonly trace: (message: string) => void = () => {}) {}
+
   /**
    * Language servers may hand back a prototype (`int sum(int, int);` in a header or a forward
    * declaration) instead of the body. Resolve to the definition so a function has exactly one node.
@@ -90,6 +93,7 @@ class GraphBuilder {
     const definition = locations.find(l => inWorkspace(l.uri)) ?? locations[0];
     const [resolved] = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
       'vscode.prepareCallHierarchy', definition.uri, definition.range.start) ?? [];
+    this.trace(`  definition of ${describeItem(item)} -> ${resolved ? describeItem(resolved) : 'unresolved, keeping original'}`);
     return resolved ?? item;
   }
 
@@ -121,18 +125,26 @@ class GraphBuilder {
       level = hit.children;
     }
 
+    const cLike = C_LIKE_EXTENSIONS.has(path.extname(item.uri.fsPath).toLowerCase());
     let leaf = stripSignature(item.name);
-    const self = chain[chain.length - 1];
+    let self: vscode.DocumentSymbol | undefined = chain[chain.length - 1];
     if (self && lastSegment(stripSignature(self.name)) === lastSegment(leaf)) {
       chain.pop();
-      // Out-of-line C++ members show up in the outline as "Dog::speak"; keep the longer spelling.
+      // Some servers name out-of-line C++ members "Dog::speak" in the outline; keep the longer spelling.
       const outlineName = stripSignature(self.name);
       if (outlineName.length > leaf.length) {
         leaf = outlineName;
       }
+    } else {
+      self = undefined;
     }
-    const separator = C_LIKE_EXTENSIONS.has(path.extname(item.uri.fsPath).toLowerCase()) ? '::' : '.';
+    const separator = cLike ? '::' : '.';
     const containers = chain.filter(s => CONTAINER_KINDS.has(s.kind)).map(s => stripSignature(s.name));
+    // The C/C++ extension lists out-of-line members (`void Dog::speak() const {}`) at the top level as
+    // "speak() const" and puts the owning class in `detail` ("Dog").
+    if (cLike && containers.length === 0 && !leaf.includes('::') && self?.detail) {
+      containers.push(self.detail);
+    }
     return [...containers, leaf].join(separator);
   }
 
@@ -183,7 +195,7 @@ class GraphBuilder {
 export async function buildCallGraph(
   uri: vscode.Uri,
   position: vscode.Position,
-  { maxDepth = 15, maxNodes = 300, token }: BuildOptions = {},
+  { maxDepth = 15, maxNodes = 300, token, trace }: BuildOptions = {},
 ): Promise<CallGraph | undefined> {
   const prepared = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
     'vscode.prepareCallHierarchy', uri, position);
@@ -191,10 +203,12 @@ export async function buildCallGraph(
     return undefined;
   }
 
-  const builder = new GraphBuilder();
+  const builder = new GraphBuilder(trace);
+  prepared.forEach(item => builder.trace(`prepared: ${describeItem(item)}`));
   type Entry = { item: vscode.CallHierarchyItem; id: string };
   let frontier: Entry[] = [];
-  for (const item of await Promise.all(prepared.map(i => builder.toDefinition(i)))) {
+  for (const preparedItem of prepared) {
+    const item = await builder.toDefinition(preparedItem);
     const { id, isNew } = await builder.addNode(item);
     if (isNew) {
       frontier.push({ item, id });
@@ -206,14 +220,19 @@ export async function buildCallGraph(
     if (token?.isCancellationRequested) {
       break;
     }
-    const levels = await Promise.all(frontier.map(async ({ item, id }) => ({
-      id,
-      calls: await vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[]>(
-        'vscode.provideIncomingCalls', item) ?? [],
-    })));
+    // One request at a time: the C/C++ extension answers overlapping call-hierarchy requests with nothing.
+    const levels: { id: string; calls: vscode.CallHierarchyIncomingCall[] }[] = [];
+    for (const { item, id } of frontier) {
+      levels.push({
+        id,
+        calls: await vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[]>(
+          'vscode.provideIncomingCalls', item) ?? [],
+      });
+    }
 
     const next: Entry[] = [];
     for (const { id: to, calls } of levels) {
+      builder.trace(`incoming calls of ${to}: ${calls.length ? calls.map(c => describeItem(c.from)).join(', ') : 'none'}`);
       for (const call of calls) {
         if (!inWorkspace(call.from.uri)) {
           continue; // skip library / system-header callers

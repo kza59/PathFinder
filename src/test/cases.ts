@@ -1,4 +1,5 @@
-// Expected call graphs for each fixture folder. Ids are relative to the fixture folder (the test workspace).
+// Expected call graphs for each fixture folder. Ids are written relative to the fixture folder for
+// readability; suite.ts expands them to the real absolute-path ids before comparing.
 
 export interface Case {
   name: string;
