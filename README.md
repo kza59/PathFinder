@@ -28,4 +28,4 @@ def function3():
 def main():
 	function2()
 
-see example.jpg for how this call graph should look like.
+see example.png for how this call graph should look like.
