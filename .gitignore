@@ -1,2 +1,5 @@
 node_modules/
 out/
+.vscode-test/
+test*/**/main
+__pycache__/

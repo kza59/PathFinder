@@ -8,10 +8,19 @@
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}",
         "--disable-extension=ms-toolsai.jupyter",
-        "${workspaceFolder}/test1"
+        "${workspaceFolder}/${input:fixture}"
       ],
       "outFiles": ["${workspaceFolder}/out/**/*.js"],
       "preLaunchTask": "npm: compile"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "fixture",
+      "type": "pickString",
+      "description": "Folder to open in the Extension Development Host",
+      "options": ["test1", "test2", "test3", "test4/python", "test4/cpp"],
+      "default": "test1"
     }
   ]
 }

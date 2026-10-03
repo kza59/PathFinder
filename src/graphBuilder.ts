@@ -1,16 +1,18 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
-import { makeNodeId, MODULE_NAME } from './nodeId';
+import { makeNodeId, MODULE_NAME, normalizePath } from './nodeId';
 
 export interface GraphNode {
-  id: string;     // makeNodeId(file, label)
-  label: string;  // function name
-  file: string;   // absolute path, for jump-to-source
-  line: number;   // 1-based line of the function name (same base as debugger frames)
+  id: string;       // makeNodeId(file, label)
+  label: string;    // qualified function name: "function1", "Dog.speak" (Python), "Dog::speak" (C++)
+  file: string;     // absolute path of the definition (never a prototype), for jump-to-source
+  line: number;     // 1-based line of the function name (same base as debugger frames)
+  endLine: number;  // 1-based last line of the function body
 }
 
 export interface GraphEdge {
-  from: string;   // caller id
-  to: string;     // callee id
+  from: string;     // caller id
+  to: string;       // callee id
 }
 
 export interface CallGraph {
@@ -24,24 +26,158 @@ export interface BuildOptions {
   token?: vscode.CancellationToken;
 }
 
-function functionName(item: vscode.CallHierarchyItem): string {
-  // Calls from top-level code come back as a file/module item; the debugger calls that frame "<module>".
-  return item.kind === vscode.SymbolKind.File || item.kind === vscode.SymbolKind.Module
-    ? MODULE_NAME
-    : item.name;
+const C_LIKE_EXTENSIONS = new Set(['.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx']);
+
+// Symbols whose names become part of a qualified name (classes, namespaces, enclosing functions).
+const CONTAINER_KINDS = new Set([
+  vscode.SymbolKind.Namespace, vscode.SymbolKind.Class, vscode.SymbolKind.Struct,
+  vscode.SymbolKind.Interface, vscode.SymbolKind.Function, vscode.SymbolKind.Method,
+]);
+
+/** "Dog::speak() const" -> "Dog::speak" */
+function stripSignature(name: string): string {
+  return name.replace(/\(.*$/s, '').trim();
 }
 
-function idOf(item: vscode.CallHierarchyItem): string {
-  return makeNodeId(item.uri.fsPath, functionName(item));
+function lastSegment(name: string): string {
+  return name.split(/::|\./).pop() ?? name;
 }
 
 function inWorkspace(uri: vscode.Uri): boolean {
   return uri.scheme === 'file' && vscode.workspace.getWorkspaceFolder(uri) !== undefined;
 }
 
+function sameItem(a: vscode.CallHierarchyItem, b: vscode.CallHierarchyItem): boolean {
+  return a.uri.toString() === b.uri.toString() && a.selectionRange.start.isEqual(b.selectionRange.start);
+}
+
+/**
+ * For debugTracker: the node whose body contains a stack frame location (file + 1-based line).
+ * Matching by location instead of by frame name avoids every debugger's own naming scheme
+ * (debugpy says "speak", gdb says "Dog::speak() const").
+ */
+export function findNodeForFrame(graph: CallGraph, filePath: string, line: number): GraphNode | undefined {
+  const file = normalizePath(filePath);
+  let best: GraphNode | undefined;
+  for (const node of graph.nodes) {
+    if (normalizePath(node.file) === file && node.line <= line && line <= node.endLine
+        && (!best || node.line > best.line)) {
+      best = node; // innermost wins, for nested functions
+    }
+  }
+  return best;
+}
+
+class GraphBuilder {
+  private readonly nodes = new Map<string, GraphNode>();
+  private readonly edges = new Map<string, GraphEdge>();
+  private readonly idByLocation = new Map<string, string>();
+  private readonly symbolCache = new Map<string, Promise<vscode.DocumentSymbol[]>>();
+
+  /**
+   * Language servers may hand back a prototype (`int sum(int, int);` in a header or a forward
+   * declaration) instead of the body. Resolve to the definition so a function has exactly one node.
+   */
+  async toDefinition(item: vscode.CallHierarchyItem): Promise<vscode.CallHierarchyItem> {
+    const targets = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
+      'vscode.executeDefinitionProvider', item.uri, item.selectionRange.start) ?? [];
+    const locations = targets.map(t => 'targetUri' in t
+      ? new vscode.Location(t.targetUri, t.targetSelectionRange ?? t.targetRange)
+      : t);
+    if (locations.length === 0 || locations.some(l => l.uri.toString() === item.uri.toString() && item.range.contains(l.range.start))) {
+      return item;
+    }
+    const definition = locations.find(l => inWorkspace(l.uri)) ?? locations[0];
+    const [resolved] = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
+      'vscode.prepareCallHierarchy', definition.uri, definition.range.start) ?? [];
+    return resolved ?? item;
+  }
+
+  private documentSymbols(uri: vscode.Uri): Promise<vscode.DocumentSymbol[]> {
+    const key = uri.toString();
+    let symbols = this.symbolCache.get(key);
+    if (!symbols) {
+      symbols = Promise.resolve(vscode.commands.executeCommand<(vscode.DocumentSymbol | vscode.SymbolInformation)[]>(
+        'vscode.executeDocumentSymbolProvider', uri))
+        .then(result => (result ?? []).filter((s): s is vscode.DocumentSymbol => 'children' in s));
+      this.symbolCache.set(key, symbols);
+    }
+    return symbols;
+  }
+
+  /** "speak" -> "Dog.speak" / "Dog::speak", using the document outline for the enclosing classes. */
+  private async qualifiedName(item: vscode.CallHierarchyItem): Promise<string> {
+    // Calls from top-level code come back as a file/module item; the debugger calls that frame "<module>".
+    if (item.kind === vscode.SymbolKind.File || item.kind === vscode.SymbolKind.Module) {
+      return MODULE_NAME;
+    }
+    const chain: vscode.DocumentSymbol[] = [];
+    for (let level = await this.documentSymbols(item.uri); ;) {
+      const hit = level.find(s => s.range.contains(item.selectionRange.start));
+      if (!hit) {
+        break;
+      }
+      chain.push(hit);
+      level = hit.children;
+    }
+
+    let leaf = stripSignature(item.name);
+    const self = chain[chain.length - 1];
+    if (self && lastSegment(stripSignature(self.name)) === lastSegment(leaf)) {
+      chain.pop();
+      // Out-of-line C++ members show up in the outline as "Dog::speak"; keep the longer spelling.
+      const outlineName = stripSignature(self.name);
+      if (outlineName.length > leaf.length) {
+        leaf = outlineName;
+      }
+    }
+    const separator = C_LIKE_EXTENSIONS.has(path.extname(item.uri.fsPath).toLowerCase()) ? '::' : '.';
+    const containers = chain.filter(s => CONTAINER_KINDS.has(s.kind)).map(s => stripSignature(s.name));
+    return [...containers, leaf].join(separator);
+  }
+
+  /** Returns the node id for `item`, creating the node the first time. `isNew` tells the caller to keep walking. */
+  async addNode(item: vscode.CallHierarchyItem): Promise<{ id: string; isNew: boolean }> {
+    const location = `${item.uri.toString()}#${item.selectionRange.start.line}`;
+    const known = this.idByLocation.get(location);
+    if (known) {
+      return { id: known, isNew: false };
+    }
+
+    const label = await this.qualifiedName(item);
+    let id = makeNodeId(item.uri.fsPath, label);
+    if (this.nodes.has(id)) {
+      // Two different definitions with the same name (e.g. C++ overloads): keep both, distinguishable.
+      id = `${id}@${item.selectionRange.start.line + 1}`;
+    }
+    this.idByLocation.set(location, id);
+    this.nodes.set(id, {
+      id,
+      label,
+      file: item.uri.fsPath,
+      line: item.selectionRange.start.line + 1,
+      endLine: item.range.end.line + 1,
+    });
+    return { id, isNew: true };
+  }
+
+  get size(): number {
+    return this.nodes.size;
+  }
+
+  addEdge(from: string, to: string) {
+    this.edges.set(`${from}->${to}`, { from, to });
+  }
+
+  result(): CallGraph {
+    return { nodes: [...this.nodes.values()], edges: [...this.edges.values()] };
+  }
+}
+
 /**
  * Builds the "how did we get here" graph for the function at `position`:
  * the function itself plus every transitive caller, with edges pointing caller -> callee.
+ * `position` may be on a definition, a prototype, or a call site.
  * Returns undefined if no language server can resolve a function at that position.
  */
 export async function buildCallGraph(
@@ -49,59 +185,52 @@ export async function buildCallGraph(
   position: vscode.Position,
   { maxDepth = 15, maxNodes = 300, token }: BuildOptions = {},
 ): Promise<CallGraph | undefined> {
-  const roots = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
+  const prepared = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
     'vscode.prepareCallHierarchy', uri, position);
-  if (!roots?.length) {
+  if (!prepared?.length) {
     return undefined;
   }
 
-  const nodes = new Map<string, GraphNode>();
-  const edges = new Map<string, GraphEdge>();
+  const builder = new GraphBuilder();
+  type Entry = { item: vscode.CallHierarchyItem; id: string };
+  let frontier: Entry[] = [];
+  for (const item of await Promise.all(prepared.map(i => builder.toDefinition(i)))) {
+    const { id, isNew } = await builder.addNode(item);
+    if (isNew) {
+      frontier.push({ item, id });
+    }
+  }
 
-  const addNode = (item: vscode.CallHierarchyItem) => {
-    const id = idOf(item);
-    nodes.set(id, {
-      id,
-      label: functionName(item),
-      file: item.uri.fsPath,
-      line: item.selectionRange.start.line + 1,
-    });
-  };
-
-  roots.forEach(addNode);
-  let frontier = roots;
-
-  // Breadth-first walk up the callers; `nodes` doubles as the visited set, so recursion terminates.
+  // Breadth-first walk up the callers; nodes are deduplicated by definition location, so recursion terminates.
   for (let depth = 0; depth < maxDepth && frontier.length > 0; depth++) {
     if (token?.isCancellationRequested) {
       break;
     }
-    const levels = await Promise.all(frontier.map(async item => ({
-      item,
+    const levels = await Promise.all(frontier.map(async ({ item, id }) => ({
+      id,
       calls: await vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[]>(
         'vscode.provideIncomingCalls', item) ?? [],
     })));
 
-    const next: vscode.CallHierarchyItem[] = [];
-    for (const { item, calls } of levels) {
-      const to = idOf(item);
+    const next: Entry[] = [];
+    for (const { id: to, calls } of levels) {
       for (const call of calls) {
         if (!inWorkspace(call.from.uri)) {
-          continue; // skip library / site-packages callers
+          continue; // skip library / system-header callers
         }
-        const from = idOf(call.from);
-        if (!nodes.has(from)) {
-          if (nodes.size >= maxNodes) {
-            continue;
-          }
-          addNode(call.from);
-          next.push(call.from);
+        if (builder.size >= maxNodes) {
+          break;
         }
-        edges.set(`${from}->${to}`, { from, to });
+        const caller = await builder.toDefinition(call.from);
+        const { id: from, isNew } = await builder.addNode(caller);
+        if (isNew) {
+          next.push({ item: caller, id: from });
+        }
+        builder.addEdge(from, to);
       }
     }
     frontier = next;
   }
 
-  return { nodes: [...nodes.values()], edges: [...edges.values()] };
+  return builder.result();
 }

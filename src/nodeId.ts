@@ -5,8 +5,11 @@ import * as vscode from 'vscode';
  * Node identity shared by graphBuilder (static analysis) and debugTracker (runtime).
  * Both sides MUST build ids through makeNodeId, or highlights won't match graph nodes.
  *
- * Format: `<workspace-relative posix path>::<functionName>`, e.g. `function1.py::function1`.
+ * Format: `<workspace-relative posix path>::<qualified function name>`, e.g. `function1.py::function1`,
+ * `animals.py::Dog.speak`, `animals.cpp::Dog::speak`. The path is always the definition's file, never a header.
  * Module-level code uses MODULE_NAME (what debugpy reports as the frame name).
+ * The runtime side should map stack frames to nodes with graphBuilder's findNodeForFrame (file + line),
+ * since debuggers spell function names differently from language servers.
  */
 export const MODULE_NAME = '<module>';
 
