@@ -6,7 +6,10 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Visualization", "Debuggers"],
+  "categories": [
+    "Visualization",
+    "Debuggers"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -45,12 +48,14 @@
     "watch": "tsc -watch -p ./",
     "build:webview": "esbuild media/graph.ts --bundle --platform=browser --outfile=out/webview/graph.js",
     "watch:webview": "npm run build:webview -- --watch",
-    "vscode:prepublish": "npm run compile"
+    "vscode:prepublish": "npm run compile",
+    "test": "tsc -p ./ && node out/test/runTest.js"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "esbuild": "^0.28.2",
+    "@vscode/test-electron": "^2.5.2",
     "typescript": "^5.4.0"
   },
   "dependencies": {

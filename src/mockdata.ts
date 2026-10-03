@@ -6,37 +6,43 @@ export const mockGraph: GraphData = {
       id: "sum.py::sum",
       label: "sum",
       file: "/home/kanez/Useful/Stormhacks2026/PathFinder/test1/sum.py",
-      line: 1
+      line: 1,
+      endLine: 1
     },
     {
       id: "function1.py::function1",
       label: "function1",
       file: "/home/kanez/Useful/Stormhacks2026/PathFinder/test1/function1.py",
-      line: 4
+      line: 4,
+      endLine: 4
     },
     {
       id: "function2.py::function2",
       label: "function2",
       file: "/home/kanez/Useful/Stormhacks2026/PathFinder/test1/function2.py",
-      line: 5
+      line: 5,
+      endLine: 5
     },
     {
       id: "function3.py::function3",
       label: "function3",
       file: "/home/kanez/Useful/Stormhacks2026/PathFinder/test1/function3.py",
-      line: 6
+      line: 6,
+      endLine: 6
     },
     {
       id: "main.py::main",
       label: "main",
       file: "/home/kanez/Useful/Stormhacks2026/PathFinder/test1/main.py",
-      line: 4
+      line: 4,
+      endLine: 4
     },
     {
       id: "main.py::<module>",
       label: "<module>",
       file: "/home/kanez/Useful/Stormhacks2026/PathFinder/test1/main.py",
-      line: 1
+      line: 1,
+      endLine: 1
     }
   ],
 
