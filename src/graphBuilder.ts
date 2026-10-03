@@ -13,6 +13,7 @@ export interface GraphNode {
 export interface GraphEdge {
   from: string;     // caller id
   to: string;       // callee id
+  lines: number[];  // 1-based lines in the caller's file where it calls the callee, ascending (one per call site)
 }
 
 export interface CallGraph {
@@ -177,8 +178,12 @@ class GraphBuilder {
     return this.nodes.size;
   }
 
-  addEdge(from: string, to: string) {
-    this.edges.set(`${from}->${to}`, { from, to });
+  addEdge(from: string, to: string, lines: number[]) {
+    const key = `${from}->${to}`;
+    const edge = this.edges.get(key) ?? { from, to, lines: [] };
+    // Servers may report each call site as its own incoming call, so merge rather than overwrite.
+    edge.lines = [...new Set([...edge.lines, ...lines])].sort((a, b) => a - b);
+    this.edges.set(key, edge);
   }
 
   result(): CallGraph {
@@ -245,7 +250,7 @@ export async function buildCallGraph(
         if (isNew) {
           next.push({ item: caller, id: from });
         }
-        builder.addEdge(from, to);
+        builder.addEdge(from, to, call.fromRanges.map(r => r.start.line + 1));
       }
     }
     frontier = next;
