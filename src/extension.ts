@@ -1,8 +1,11 @@
 import * as vscode from 'vscode';
 import { buildCallGraph } from './graphBuilder';
+import { registerGraphRendererTestCommands } from './test/graphRendererTest';
+import { PathFindPanel } from './webview/PathFindPanel';
 import { registerDebugTracker } from './debugTracker';
 
 export function activate(context: vscode.ExtensionContext) {
+  registerGraphRendererTestCommands(context);
   const output = vscode.window.createOutputChannel('PathFinder');
   registerDebugTracker(context);
 
@@ -20,6 +23,10 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
     // TODO: hand `graph` to the webview once rendering lands; JSON dump for now.
+
+    const panel = PathFindPanel.createOrShow(context.extensionUri);
+    panel.renderGraph(graph);
+
     output.clear();
     output.appendLine(JSON.stringify(graph, null, 2));
     output.show(true);
