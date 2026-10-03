@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import { fileName } from './filePath';
+import { fileName } from '../webview/filePath';
 import { mockDebugPath, mockGraph } from './mockdata';
-import { PathFindPanel } from './PathFindPanel';
+import { PathFindPanel } from '../webview/PathFindPanel';
 
 export function registerGraphRendererTestCommands(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('PathFind Graph');

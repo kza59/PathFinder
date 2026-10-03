@@ -1,5 +1,5 @@
 import cytoscape, { type Core, type ElementDefinition, type NodeSingular, type StylesheetJson } from 'cytoscape';
-import { fileName } from '../src/filePath';
+import { fileName } from '../src/webview/filePath';
 import type { DebugPath, GraphData, GraphMessage, GraphNode, WebviewMessage } from '../src/types';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };

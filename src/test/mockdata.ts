@@ -1,4 +1,4 @@
-import type { DebugPath, GraphData } from './types';
+import type { DebugPath, GraphData } from '../types';
 
 export const mockGraph: GraphData = {
   nodes: [

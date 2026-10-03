@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
-import type { DebugPath, GraphData, GraphMessage, NodeClickedMessage } from './types';
+import type { DebugPath, GraphData, GraphMessage, NodeClickedMessage } from '../types';
 
 export class PathFindPanel implements vscode.Disposable {
   public static currentPanel: PathFindPanel | undefined;
