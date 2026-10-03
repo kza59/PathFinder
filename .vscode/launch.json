@@ -10,7 +10,8 @@
         "--disable-extension=ms-toolsai.jupyter",
         "${workspaceFolder}/${input:fixture}"
       ],
-      "outFiles": ["${workspaceFolder}/out/**/*.js"]
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "npm: compile"
     }
   ],
   "inputs": [
