@@ -41,6 +41,50 @@ const cLines: ReadmeLines = { f1Sum: 6, f2Sum: 8, f3Sum: 12, f2F1: 7, f3F1: [11,
 const cGraph = readmeGraph('c', cLines);
 const cppGraph = readmeGraph('cpp', cLines);
 
+// All 15 functions reach sum; the longest function path spans six levels.
+const searchGraph = {
+  nodes: ['sum.py::sum', 'calculations.py::calculateTotal', 'calculations.py::validateTotal', 'helpers.py::_helper',
+    'user.py::save', 'order.py::save', 'storage.py::saveCache', 'storage.py::saveSnapshot',
+    'workflow.py::runWorkflow', 'workflow.py::runReports', 'processing.py::processBatch', 'processing.py::buildReport',
+    'records.py::processRecord', 'records.py::summarizeRecords',
+    'main.py::main', 'main.py::<module>'],
+  edges: [
+    ['calculations.py::calculateTotal', 'sum.py::sum', [8]],
+    ['calculations.py::validateTotal', 'sum.py::sum', [13]],
+    ['helpers.py::_helper', 'sum.py::sum', [7]],
+    ['user.py::save', 'sum.py::sum', [7]],
+    ['order.py::save', 'sum.py::sum', [7]],
+    ['storage.py::saveCache', 'sum.py::sum', [7]],
+    ['storage.py::saveSnapshot', 'sum.py::sum', [11]],
+    ['main.py::main', 'sum.py::sum', [14]],
+    ['main.py::main', 'calculations.py::calculateTotal', [15]],
+    ['main.py::main', 'helpers.py::_helper', [16]],
+    ['main.py::main', 'user.py::save', [17]],
+    ['main.py::main', 'order.py::save', [18]],
+    ['main.py::main', 'storage.py::saveCache', [19]],
+    ['main.py::main', 'storage.py::saveSnapshot', [20]],
+    ['main.py::main', 'workflow.py::runWorkflow', [21]],
+    ['main.py::main', 'workflow.py::runReports', [22]],
+    ['main.py::<module>', 'main.py::main', [29]],
+    ['workflow.py::runWorkflow', 'processing.py::processBatch', [7]],
+    ['workflow.py::runWorkflow', 'processing.py::buildReport', [8]],
+    ['workflow.py::runReports', 'processing.py::buildReport', [13]],
+    ['workflow.py::runReports', 'processing.py::processBatch', [14]],
+    ['processing.py::processBatch', 'records.py::processRecord', [7, 8]],
+    ['processing.py::buildReport', 'records.py::summarizeRecords', [13]],
+    ['processing.py::buildReport', 'records.py::processRecord', [14]],
+    ['records.py::processRecord', 'calculations.py::calculateTotal', [11]],
+    ['records.py::processRecord', 'calculations.py::validateTotal', [12]],
+    ['records.py::processRecord', 'helpers.py::_helper', [14]],
+    ['records.py::processRecord', 'user.py::save', [15]],
+    ['records.py::processRecord', 'order.py::save', [16]],
+    ['records.py::summarizeRecords', 'calculations.py::calculateTotal', [21]],
+    ['records.py::summarizeRecords', 'calculations.py::validateTotal', [22]],
+    ['records.py::summarizeRecords', 'storage.py::saveCache', [24]],
+    ['records.py::summarizeRecords', 'storage.py::saveSnapshot', [25]],
+  ] as ExpectedEdge[],
+};
+
 export const CASES: Record<string, Case[]> = {
   test1: [
     { name: 'python: definition', file: 'sum.py', lineContains: 'def sum', symbol: 'sum', ...pyGraph },
@@ -105,5 +149,9 @@ export const CASES: Record<string, Case[]> = {
         ['main.cpp::main', 'main.cpp::dog_owner', [15]],
       ],
     },
+  ],
+  test6: [
+    { name: 'python search fixture: definition', file: 'sum.py', lineContains: 'def sum', symbol: 'sum', ...searchGraph },
+    { name: 'python search fixture: call site', file: 'helpers.py', lineContains: 'return sum(value, 1)', symbol: 'sum', ...searchGraph },
   ],
 };

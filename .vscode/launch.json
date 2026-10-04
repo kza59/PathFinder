@@ -19,7 +19,7 @@
       "id": "fixture",
       "type": "pickString",
       "description": "Folder to open in the Extension Development Host",
-      "options": ["test1", "test2", "test3", "test4/python", "test4/cpp"],
+      "options": ["test1", "test2", "test3", "test4/python", "test4/cpp", "test6"],
       "default": "test1"
     }
   ]
