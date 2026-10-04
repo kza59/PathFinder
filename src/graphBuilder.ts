@@ -1,7 +1,10 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { makeNodeId, MODULE_NAME, normalizePath } from './nodeId';
+import { DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES } from './limits';
 import { markRecursion } from './recursion';
+
+export { DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES } from './limits';
 
 export interface GraphNode {
   id: string;       // makeNodeId(file, label)
@@ -10,6 +13,7 @@ export interface GraphNode {
   line: number;     // 1-based line of the function name (same base as debugger frames)
   endLine: number;  // 1-based last line of the function body
   recursionGroup?: number; // set on nodes in a recursive structure; members of the same cycle share the number
+  hiddenCallers?: number;  // callers that exist but were left out (depth or node limit reached); the graph is cut off here
 }
 
 export interface GraphEdge {
@@ -50,6 +54,10 @@ function lastSegment(name: string): string {
 
 function inWorkspace(uri: vscode.Uri): boolean {
   return uri.scheme === 'file' && vscode.workspace.getWorkspaceFolder(uri) !== undefined;
+}
+
+function locationKey(item: vscode.CallHierarchyItem): string {
+  return `${item.uri.toString()}#${item.selectionRange.start.line}`;
 }
 
 function describeItem(item: vscode.CallHierarchyItem): string {
@@ -178,9 +186,14 @@ class GraphBuilder {
     return [...containers, leaf].join(separator);
   }
 
+  /** The id of the node already built for this item's location, if any. */
+  knownId(item: vscode.CallHierarchyItem): string | undefined {
+    return this.idByLocation.get(locationKey(item));
+  }
+
   /** Returns the node id for `item`, creating the node the first time. `isNew` tells the caller to keep walking. */
   async addNode(item: vscode.CallHierarchyItem): Promise<{ id: string; isNew: boolean }> {
-    const location = `${item.uri.toString()}#${item.selectionRange.start.line}`;
+    const location = locationKey(item);
     const known = this.idByLocation.get(location);
     if (known) {
       return { id: known, isNew: false };
@@ -215,9 +228,116 @@ class GraphBuilder {
     this.edges.set(key, edge);
   }
 
+  /** Starts from an existing graph (copied, never mutated), so a walk can extend it. Recursion is recomputed later. */
+  seed(graph: CallGraph) {
+    for (const { recursionGroup: _group, ...node } of graph.nodes) {
+      this.nodes.set(node.id, { ...node });
+      this.idByLocation.set(`${vscode.Uri.file(node.file).toString()}#${node.line - 1}`, node.id);
+    }
+    for (const { recursive: _recursive, ...edge } of graph.edges) {
+      this.edges.set(`${edge.from}->${edge.to}`, { ...edge, lines: [...edge.lines] });
+    }
+  }
+
+  node(id: string): GraphNode | undefined {
+    return this.nodes.get(id);
+  }
+
+  clearHiddenCallers(id: string) {
+    delete this.nodes.get(id)?.hiddenCallers;
+  }
+
+  setHiddenCallers(id: string, count: number) {
+    const node = this.nodes.get(id);
+    if (node && count > 0) {
+      node.hiddenCallers = count;
+    }
+  }
+
   result(): CallGraph {
     return markRecursion({ nodes: [...this.nodes.values()], edges: [...this.edges.values()] });
   }
+}
+
+type Entry = { item: vscode.CallHierarchyItem; id: string };
+// Callers that exist but were left out, per node id, keyed by caller location so repeat call sites count once.
+type Hidden = Map<string, Set<string>>;
+
+/**
+ * Asks each entry for its callers. Callers already in the graph always get their edge. New callers are added when
+ * `mayAdd` and the node limit allows; otherwise they are only recorded in `hidden`. Returns the newly added callers.
+ */
+async function expandLevel(builder: GraphBuilder, entries: Entry[], mayAdd: boolean, maxNodes: number, hidden: Hidden): Promise<Entry[]> {
+  // One request at a time: the C/C++ extension answers overlapping call-hierarchy requests with nothing.
+  const levels: { id: string; calls: vscode.CallHierarchyIncomingCall[] }[] = [];
+  for (const { item, id } of entries) {
+    levels.push({
+      id,
+      calls: await vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[]>(
+        'vscode.provideIncomingCalls', item) ?? [],
+    });
+  }
+
+  const next: Entry[] = [];
+  for (const { id: to, calls } of levels) {
+    builder.trace(`incoming calls of ${to}: ${calls.length ? calls.map(c => describeItem(c.from)).join(', ') : 'none'}`);
+    for (const call of calls) {
+      if (!inWorkspace(call.from.uri)) {
+        continue; // skip library / system-header callers
+      }
+      const lines = call.fromRanges.map(r => r.start.line + 1);
+      const known = builder.knownId(call.from);
+      if (known) {
+        builder.addEdge(known, to, lines);
+        continue;
+      }
+      if (!mayAdd || builder.size >= maxNodes) {
+        hidden.set(to, (hidden.get(to) ?? new Set()).add(locationKey(call.from)));
+        continue;
+      }
+      const caller = await builder.toDefinition(call.from);
+      const { id: from, isNew } = await builder.addNode(caller);
+      if (isNew) {
+        next.push({ item: caller, id: from });
+      }
+      builder.addEdge(from, to, lines);
+    }
+  }
+  return next;
+}
+
+/** Breadth-first walk up the callers of `frontier`, marking `hiddenCallers` wherever the limits cut it off. */
+async function walkCallers(builder: GraphBuilder, frontier: Entry[], maxDepth: number, maxNodes: number, token?: vscode.CancellationToken) {
+  const hidden: Hidden = new Map();
+  // Nodes are deduplicated by definition location, so recursion terminates.
+  let cancelled = false;
+  for (let depth = 0; depth < maxDepth && frontier.length > 0; depth++) {
+    if (token?.isCancellationRequested) {
+      cancelled = true;
+      break;
+    }
+    frontier = await expandLevel(builder, frontier, true, maxNodes, hidden);
+  }
+  // Depth limit reached with nodes still unexplored: look one level further without adding nodes, so the graph
+  // gets the edges between nodes it already has and marks only the nodes that really have more callers.
+  if (frontier.length > 0 && !cancelled && !token?.isCancellationRequested) {
+    await expandLevel(builder, frontier, false, maxNodes, hidden);
+  }
+  hidden.forEach((callers, id) => builder.setHiddenCallers(id, callers.size));
+}
+
+/** The call hierarchy item for a node already in a graph, by asking the language server at its name. */
+async function itemForNode(node: GraphNode): Promise<vscode.CallHierarchyItem | undefined> {
+  if (node.label === MODULE_NAME) {
+    return undefined; // top-level code has no callers
+  }
+  const uri = vscode.Uri.file(node.file);
+  const text = (await vscode.workspace.openTextDocument(uri)).lineAt(node.line - 1).text;
+  const name = lastSegment(node.label).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const column = Math.max(text.search(new RegExp(`\\b${name}\\b`)), 0);
+  const items = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
+    'vscode.prepareCallHierarchy', uri, new vscode.Position(node.line - 1, column)) ?? [];
+  return items.find(i => i.selectionRange.start.line === node.line - 1) ?? items[0];
 }
 
 /**
@@ -229,7 +349,7 @@ class GraphBuilder {
 export async function buildCallGraph(
   uri: vscode.Uri,
   position: vscode.Position,
-  { maxDepth = 15, maxNodes = 300, token, trace }: BuildOptions = {},
+  { maxDepth = DEFAULT_MAX_DEPTH, maxNodes = DEFAULT_MAX_NODES, token, trace }: BuildOptions = {},
 ): Promise<CallGraph | undefined> {
   const prepared = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
     'vscode.prepareCallHierarchy', uri, position);
@@ -239,8 +359,7 @@ export async function buildCallGraph(
 
   const builder = new GraphBuilder(trace);
   prepared.forEach(item => builder.trace(`prepared: ${describeItem(item)}`));
-  type Entry = { item: vscode.CallHierarchyItem; id: string };
-  let frontier: Entry[] = [];
+  const frontier: Entry[] = [];
   for (const preparedItem of prepared) {
     const item = await builder.toDefinition(preparedItem);
     const { id, isNew } = await builder.addNode(item);
@@ -248,42 +367,44 @@ export async function buildCallGraph(
       frontier.push({ item, id });
     }
   }
+  await walkCallers(builder, frontier, maxDepth, maxNodes, token);
+  return builder.result();
+}
 
-  // Breadth-first walk up the callers; nodes are deduplicated by definition location, so recursion terminates.
-  for (let depth = 0; depth < maxDepth && frontier.length > 0; depth++) {
-    if (token?.isCancellationRequested) {
-      break;
-    }
-    // One request at a time: the C/C++ extension answers overlapping call-hierarchy requests with nothing.
-    const levels: { id: string; calls: vscode.CallHierarchyIncomingCall[] }[] = [];
-    for (const { item, id } of frontier) {
-      levels.push({
-        id,
-        calls: await vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[]>(
-          'vscode.provideIncomingCalls', item) ?? [],
-      });
-    }
-
-    const next: Entry[] = [];
-    for (const { id: to, calls } of levels) {
-      builder.trace(`incoming calls of ${to}: ${calls.length ? calls.map(c => describeItem(c.from)).join(', ') : 'none'}`);
-      for (const call of calls) {
-        if (!inWorkspace(call.from.uri)) {
-          continue; // skip library / system-header callers
-        }
-        if (builder.size >= maxNodes) {
-          break;
-        }
-        const caller = await builder.toDefinition(call.from);
-        const { id: from, isNew } = await builder.addNode(caller);
-        if (isNew) {
-          next.push({ item: caller, id: from });
-        }
-        builder.addEdge(from, to, call.fromRanges.map(r => r.start.line + 1));
-      }
-    }
-    frontier = next;
+/**
+ * Loads more callers above one node of an existing graph (typically one marked with `hiddenCallers`), using the
+ * same limits as buildCallGraph counted from that node, and returns the merged graph. `graph` is not modified.
+ * Other marked nodes are re-checked afterwards: a caller they were missing may have just joined the graph, in
+ * which case they get its edge and their marker is updated or removed.
+ */
+export async function expandCallers(
+  graph: CallGraph,
+  nodeId: string,
+  { maxDepth = DEFAULT_MAX_DEPTH, maxNodes = DEFAULT_MAX_NODES, token, trace }: BuildOptions = {},
+): Promise<CallGraph> {
+  const builder = new GraphBuilder(trace);
+  builder.seed(graph);
+  const node = builder.node(nodeId);
+  const item = node && await itemForNode(node);
+  if (!item) {
+    builder.trace(`expand: no call hierarchy item for ${nodeId}`);
+    return builder.result();
   }
+
+  builder.clearHiddenCallers(nodeId);
+  await walkCallers(builder, [{ item, id: nodeId }], maxDepth, maxNodes, token);
+
+  const stale: Entry[] = [];
+  for (const marked of graph.nodes.filter(n => n.hiddenCallers && n.id !== nodeId)) {
+    const markedItem = await itemForNode(marked);
+    if (markedItem) {
+      builder.clearHiddenCallers(marked.id);
+      stale.push({ item: markedItem, id: marked.id });
+    }
+  }
+  const hidden: Hidden = new Map();
+  await expandLevel(builder, stale, false, maxNodes, hidden);
+  hidden.forEach((callers, id) => builder.setHiddenCallers(id, callers.size));
 
   return builder.result();
 }

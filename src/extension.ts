@@ -47,7 +47,7 @@ export function activate(context: vscode.ExtensionContext) {
       (_progress, token) => buildCallGraph(editor.document.uri, editor.selection.active, { token }),
     );
     if (!graph) {
-      vscode.window.showWarningMessage('PathFinder: no function found here (is the language server still loading?)');
+      vscode.window.showWarningMessage("PathFinder: no function at the cursor. Right-click a function's name or a call to it. (If you just opened this folder, the language server may still be loading.)");
       return;
     }
     // TODO: hand `graph` to the webview once rendering lands; JSON dumclp for now.
