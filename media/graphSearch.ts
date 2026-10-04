@@ -103,6 +103,17 @@ export class GraphSearch {
     return this.publish();
   }
 
+  public results(): GraphNode[] {
+    return this.ids.map(id => this.cy.getElementById(id).data() as GraphNode);
+  }
+
+  public choose(id: string): SearchState {
+    const index = this.ids.indexOf(id);
+    if (index < 0) return this.publish();
+    this.index = index - 1;
+    return this.move(1);
+  }
+
   private publish(): SearchState {
     const state: SearchState = {
       kind: this.kind,

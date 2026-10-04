@@ -1,8 +1,9 @@
 import cytoscape, { type Core, type ElementDefinition, type NodeSingular, type StylesheetJson } from 'cytoscape';
 import { ExploreLayout } from './exploreLayout';
 import { GraphSearch, type SearchState } from './graphSearch';
+import { NodePills } from './nodePills';
+import { PathNavigation } from './pathNavigation';
 import { TruncationMarkers } from './truncationMarkers';
-import { initializeReplayControls } from './sessionReplay';
 import { heatColor, heatPalette, heatPosition, type HeatRange } from './heatmap';
 import { recursionAnnouncement, recursionColor, recursionOutlines } from './recursion';
 import { recursionDepth, type RecursionDepth } from '../src/recursion';
@@ -33,8 +34,6 @@ export const layoutOptions = {
 const nodeLabel = (node: NodeSingular): string => [
   `${node.hasClass('chokepoint') ? '◇ ' : ''}${node.data('label')}`,
   ...(node.data('callArgs') ? [node.data('callArgs') as string] : []), // call values feature
-  ...(node.hasClass('target') ? ['Target'] : []),
-  ...(node.hasClass('current') ? ['You are here'] : []),
 ].join('\n');
 
 export function graphStyles(foreground = '#d4d4d4', background = '#252526'): StylesheetJson {
@@ -453,6 +452,18 @@ export class GraphRenderer {
   public highlightPath(path: DebugPath): void {
     this.path = [...path];
     this.recursionLevels = recursionDepth(this.path, this.graph);
+    this.applyPathStyles(path);
+    const current = path.length ? this.cy.getElementById(path[path.length - 1]) : undefined;
+    this.pathChanged(current?.isNode() ? current.data() as GraphNode : undefined, path.length > 0);
+    this.recursionChanged(this.recursionLevels);
+  }
+
+  /** Browsing source paths must not move the debugger's current-location marker. */
+  public previewPath(path?: DebugPath): void {
+    this.applyPathStyles(path ?? this.path);
+  }
+
+  private applyPathStyles(path: DebugPath): void {
     const pathIds = new Set(path);
     const pathNodes = this.cy.nodes().filter(node => pathIds.has(node.id()));
     const pathEdges = new Set(path.slice(1).map((id, index) => JSON.stringify([path[index], id])));
@@ -466,18 +477,14 @@ export class GraphRenderer {
           edge.data('source'), edge.data('target'),
         ]))).removeClass('dimmed').addClass('path');
       }
-      if (path.length) {
-        const current = this.cy.getElementById(path[path.length - 1]);
+      if (this.path.length) {
+        const current = this.cy.getElementById(this.path[this.path.length - 1]);
         if (current.isNode()) {
-          current.addClass('current');
+          current.removeClass('dimmed').addClass('current');
         }
       }
       this.applyHover();
     });
-
-    const current = path.length ? this.cy.getElementById(path[path.length - 1]) : undefined;
-    this.pathChanged(current?.isNode() ? current.data() as GraphNode : undefined, path.length > 0);
-    this.recursionChanged(this.recursionLevels);
   }
 
   public clearDebugPath(): void {
@@ -519,7 +526,24 @@ export function initializeGraphWebview(): void {
   const searchPrevious = document.getElementById('search-previous') as HTMLButtonElement;
   const searchNext = document.getElementById('search-next') as HTMLButtonElement;
   const searchSubmit = document.getElementById('search-submit') as HTMLButtonElement;
+  const searchResults = document.getElementById('search-results')!;
+  let suggestionsOpen = false;
+  let searchKind: SearchState['kind'] = 'functions';
+  const closeSuggestions = () => {
+    suggestionsOpen = false;
+    searchResults.hidden = true;
+    searchInput.setAttribute('aria-expanded', 'false');
+    searchInput.removeAttribute('aria-activedescendant');
+  };
+  const positionSuggestions = () => {
+    const field = searchInput.parentElement!;
+    const header = field.closest('header')!;
+    // Keep the dropdown below the controls so it cannot intercept another Suggest Breakpoint click.
+    searchResults.style.top = `${header.getBoundingClientRect().bottom - field.getBoundingClientRect().top + 4}px`;
+  };
   const showNoise = document.getElementById('show-noise') as HTMLInputElement;
+  const noiseCount = document.getElementById('noise-count')!;
+  const clearHighlights = document.getElementById('clear-highlights') as HTMLButtonElement;
   const whereToBreak = document.getElementById('where-to-break') as HTMLButtonElement;
   const theme = getComputedStyle(document.body);
   const foreground = theme.getPropertyValue('--vscode-editor-foreground').trim() || '#d4d4d4';
@@ -544,16 +568,20 @@ export function initializeGraphWebview(): void {
     maxZoom: 3,
   });
   const updateEmpty = (count: number) => {
+    const noiseFunctions = cy.nodes().filter(node => node.data('noise') === true).length;
+    noiseCount.textContent = `(${noiseFunctions} ${showNoise.checked ? 'shown' : 'hidden'})`;
+    noiseCount.hidden = noiseFunctions === 0;
+    clearHighlights.disabled = cy.nodes().length === 0;
     empty.hidden = count > 0;
     empty.textContent = cy.nodes().length && !count
       ? 'Noise functions are hidden. Enable Show Noise to display them.'
       : 'No functions in this graph';
   };
   const updateChokepoints = () => {
-    whereToBreak.disabled = renderer.visibleChokepointCount === 0;
-    whereToBreak.title = whereToBreak.disabled
-      ? 'No visible chokepoints in this graph'
-      : 'Focus a chokepoint; use the search arrows to visit each suggested breakpoint location';
+    whereToBreak.disabled = false;
+    whereToBreak.title = renderer.visibleChokepointCount === 0
+      ? 'Check for breakpoint suggestions; no chokepoints found in this graph'
+      : 'Show diamond-marked chokepoints; use the search arrows to cycle breakpoint suggestions';
   };
   const renderer = new GraphRenderer(cy, count => {
     updateEmpty(count);
@@ -566,10 +594,11 @@ export function initializeGraphWebview(): void {
       ? `You are here: ${current.label} · ${fileName(current.file)}:${current.line}`
       : active ? 'Current function is outside this graph' : 'No runtime path';
   }, state => {
+    searchKind = state.kind;
     const chokepoints = state.kind === 'chokepoints';
-    searchInput.placeholder = chokepoints ? 'Chokepoints — type to search' : 'Find function';
-    searchCount.textContent = state.count ? `${state.index + 1} of ${state.count}` : 'No results';
-    searchCount.hidden = !chokepoints && !state.query;
+    searchInput.placeholder = chokepoints ? 'Chokepoints — type to search' : 'Go to function';
+    searchCount.textContent = state.count ? `${state.index + 1} of ${state.count}` : chokepoints || state.query ? 'No results' : '0 results';
+    searchCount.hidden = false;
     searchPrevious.disabled = searchNext.disabled = state.count === 0;
     searchPrevious.setAttribute('aria-label', chokepoints ? 'Previous chokepoint' : 'Previous match');
     searchNext.setAttribute('aria-label', chokepoints ? 'Next chokepoint' : 'Next match');
@@ -581,6 +610,7 @@ export function initializeGraphWebview(): void {
       ? `${chokepoints ? `Chokepoint ${state.index + 1} of ${state.count}: ` : ''}${state.node.label} — ${fileName(state.node.file)}:${state.node.line}`
       : chokepoints ? 'No visible chokepoints in this graph' : state.query ? 'No matching functions' : 'Enter a function name';
     searchStatus.title = state.node ? `${state.node.file}:${state.node.line}` : '';
+    renderSuggestions(state);
   }, range => {
     heatLegend.hidden = !range;
     if (range) {
@@ -609,6 +639,46 @@ export function initializeGraphWebview(): void {
 
   const truncationMarkers = new TruncationMarkers(cy, document.getElementById('truncation-markers')!,
     message => vscode.postMessage(message));
+  const nodePills = new NodePills(cy, document.getElementById('node-pills')!);
+
+  const renderSuggestions = (state: SearchState) => {
+    searchResults.replaceChildren();
+    if (!suggestionsOpen || (state.kind === 'functions' && !state.query)) { closeSuggestions(); return; }
+    const matches = renderer.search.results();
+    matches.forEach((node, index) => {
+      const option = searchResults.appendChild(document.createElement('li'));
+      option.id = `search-option-${index}`;
+      option.dataset.nodeId = node.id;
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', String(index === state.index));
+      const name = option.appendChild(document.createElement('span'));
+      name.className = 'suggestion-name';
+      if (node.chokepoint === true) {
+        const diamond = name.appendChild(document.createElement('span'));
+        diamond.className = 'chokepoint-icon';
+        diamond.textContent = '◇';
+        diamond.setAttribute('aria-hidden', 'true');
+        option.setAttribute('aria-label', `Chokepoint: ${node.label}, ${fileName(node.file)}:${node.line}`);
+      }
+      name.appendChild(document.createElement('code')).textContent = node.label;
+      option.appendChild(document.createElement('small')).textContent = `${fileName(node.file)}:${node.line}`;
+      if (index === state.index) searchInput.setAttribute('aria-activedescendant', option.id);
+    });
+    if (!matches.length) {
+      searchInput.removeAttribute('aria-activedescendant');
+      const emptyResult = searchResults.appendChild(document.createElement('li'));
+      emptyResult.className = 'empty-result';
+      emptyResult.textContent = state.kind === 'chokepoints'
+        ? cy.nodes().length ? 'No shared breakpoint location found in the visible graph.' : 'Load a graph to find breakpoint suggestions.'
+        : 'No matching functions';
+      emptyResult.setAttribute('role', 'option');
+      emptyResult.setAttribute('aria-disabled', 'true');
+    }
+    searchResults.hidden = false;
+    positionSuggestions();
+    searchInput.setAttribute('aria-expanded', 'true');
+    searchResults.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  };
 
   // Enclosures use an SVG overlay so they do not add synthetic nodes to layout, search or paths.
   const outlineHost = document.getElementById('recursion-outlines')!;
@@ -652,21 +722,48 @@ export function initializeGraphWebview(): void {
 
   whereToBreak.addEventListener('click', () => {
     searchInput.value = '';
+    searchInput.focus({ preventScroll: true });
+    suggestionsOpen = true;
     renderer.search.findChokepoints();
   });
 
-  searchInput.addEventListener('input', () => renderer.search.find(searchInput.value));
+  document.addEventListener('mousedown', event => {
+    if (!(event.target as HTMLElement).closest('#search-form, #where-to-break')) closeSuggestions();
+  });
+
+  searchInput.addEventListener('input', () => {
+    suggestionsOpen = true;
+    renderer.search.find(searchInput.value);
+  });
+  searchInput.addEventListener('focus', () => {
+    if (searchInput.value.trim()) { suggestionsOpen = true; renderer.search.find(searchInput.value); }
+  });
+  searchInput.addEventListener('blur', closeSuggestions);
+  searchResults.addEventListener('mousedown', event => event.preventDefault());
+  searchResults.addEventListener('click', event => {
+    const option = (event.target as HTMLElement).closest<HTMLElement>('[data-node-id]');
+    if (!option?.dataset.nodeId) return;
+    renderer.search.choose(option.dataset.nodeId);
+    closeSuggestions();
+  });
   document.getElementById('search-form')!.addEventListener('submit', event => {
     event.preventDefault();
+    if (suggestionsOpen && searchKind === 'functions') { closeSuggestions(); return; }
     renderer.search.move(1);
   });
   searchInput.addEventListener('keydown', event => {
-    if (event.key === 'Enter' && event.shiftKey) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      suggestionsOpen = true;
+      renderer.search.move(event.key === 'ArrowDown' ? 1 : -1);
+    } else if (event.key === 'Enter' && event.shiftKey) {
       event.preventDefault();
       renderer.search.move(-1);
     } else if (event.key === 'Escape') {
+      closeSuggestions();
       searchInput.value = '';
       renderer.search.clear();
+      searchInput.blur();
     }
   });
   searchPrevious.addEventListener('click', () => renderer.search.move(-1));
@@ -873,7 +970,10 @@ export function initializeGraphWebview(): void {
       cy.fit(cy.elements(':visible'), layoutOptions.padding);
     }
   });
-  const observer = new ResizeObserver(() => cy.resize());
+  const observer = new ResizeObserver(() => {
+    cy.resize();
+    if (suggestionsOpen) positionSuggestions();
+  });
   observer.observe(container);
   window.addEventListener('message', (event: MessageEvent<GraphMessage>) => {
     const message = event.data;
@@ -914,10 +1014,67 @@ export function initializeGraphWebview(): void {
   // A second listener, registered after the renderer's, so the graph is already updated when
   // ids are resolved to labels. A new graph re-resolves the last path, like the renderer does.
   const breadcrumb = document.getElementById('breadcrumb')!;
+  const pathPlaceholder = document.getElementById('path-placeholder')!;
   let breadcrumbPath: DebugPath = [];
+  let pathGraph: GraphData = { nodes: [], edges: [] };
+  const pathPrevious = document.getElementById('path-previous') as HTMLButtonElement;
+  const pathNext = document.getElementById('path-next') as HTMLButtonElement;
+  const pathLabel = document.getElementById('path-label')!;
+  const returnToDebug = document.getElementById('return-to-debug') as HTMLButtonElement;
+  const replayButton = document.getElementById('replay-path') as HTMLButtonElement;
+  const navigation = new PathNavigation(state => {
+    breadcrumbPath = state.path;
+    pathLabel.textContent = state.label;
+    pathLabel.title = state.title;
+    pathPrevious.disabled = pathNext.disabled = !state.canMove;
+    const history = state.hasHistory;
+    pathPrevious.title = history ? 'Previous recorded step (Left arrow)' : 'Previous source path (Left arrow)';
+    pathNext.title = history ? 'Next recorded step (Right arrow)' : 'Next source path (Right arrow)';
+    pathPrevious.setAttribute('aria-label', history ? 'Previous recorded step' : 'Previous source path');
+    pathNext.setAttribute('aria-label', history ? 'Next recorded step' : 'Next source path');
+    returnToDebug.disabled = !state.canReturn;
+    returnToDebug.title = state.canReturn ? 'Show the latest debug location' : 'Already showing the debug path, or no debug path is available';
+    replayButton.disabled = !state.canReplay;
+    replayButton.textContent = state.playing ? 'Stop' : 'Replay';
+    replayButton.setAttribute('aria-pressed', String(state.playing));
+    replayButton.title = state.playing ? 'Stop playback'
+      : history ? 'Play the recorded steps controlled by the arrows' : 'Walk through the displayed path';
+    renderer.highlightPath(state.debugPath);
+    if (state.mode === 'source' || state.frame) renderer.previewPath(state.frame ?? state.path);
+    renderBreadcrumb();
+    syncCopyPathButton();
+  });
+  const rebuildPaths = () => {
+    navigation.setGraph(pathGraph, renderer.layout?.targetIds ?? new Set(), showNoise.checked);
+  };
+  pathPrevious.addEventListener('click', () => navigation.move(-1));
+  pathNext.addEventListener('click', () => navigation.move(1));
+  returnToDebug.addEventListener('click', () => navigation.returnToDebug());
+  clearHighlights.addEventListener('click', () => {
+    navigation.clearHighlights();
+    searchInput.value = '';
+    renderer.search.clear();
+    closeSuggestions();
+    hideTooltip();
+    cy.elements().unselect();
+  });
+  replayButton.addEventListener('click', () => navigation.toggleReplay());
+  showNoise.addEventListener('change', rebuildPaths);
+  document.addEventListener('keydown', event => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const element = event.target as HTMLElement;
+    if (element.closest('input, textarea, select, button, [contenteditable="true"]')) return;
+    if (event.key === '/') { event.preventDefault(); searchInput.focus(); }
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault(); navigation.move(event.key === 'ArrowLeft' ? -1 : 1);
+    } else if (event.key === 'Escape' && navigation.state.canReturn) {
+      navigation.returnToDebug();
+    }
+  });
   const renderBreadcrumb = () => {
     breadcrumb.replaceChildren();
     breadcrumb.hidden = breadcrumbPath.length === 0;
+    pathPlaceholder.hidden = breadcrumbPath.length > 0;
     // Any id that isn't a node in the graph (pathfinder-unmatched-frame-N placeholders, or ids
     // from a different graph) reads as "(outside graph)"; consecutive ones collapse into one crumb.
     const crumbs: { node?: GraphNode; count: number }[] = [];
@@ -938,11 +1095,18 @@ export function initializeGraphWebview(): void {
         separator.setAttribute('aria-hidden', 'true');
         separator.textContent = '→';
       }
-      const crumb = breadcrumb.appendChild(document.createElement('span'));
+      const crumb = breadcrumb.appendChild(document.createElement(node ? 'button' : 'span'));
       crumb.className = node ? 'crumb' : 'crumb outside';
       crumb.textContent = node ? node.label : count > 1 ? `(outside graph ×${count})` : '(outside graph)';
       if (node) {
+        (crumb as HTMLButtonElement).type = 'button';
         crumb.title = `${node.file}:${node.line}`;
+        crumb.classList.toggle('is-target', renderer.layout?.targetIds.has(node.id) ?? false);
+        crumb.addEventListener('click', () => {
+          cy.center(cy.getElementById(node.id));
+          selection.textContent = `${node.label} · ${fileName(node.file)}:${node.line}`;
+          vscode.postMessage({ type: 'nodeClicked', id: node.id, file: node.file, line: node.line });
+        });
       }
       if (index === crumbs.length - 1) {
         crumb.classList.add('current');
@@ -957,14 +1121,12 @@ export function initializeGraphWebview(): void {
     if (!message || typeof message !== 'object') {
       return;
     }
-    if (message.type === 'debugPath') {
-      breadcrumbPath = [...message.path];
-    } else if (message.type === 'debugClear') {
-      breadcrumbPath = [];
-    } else if (message.type !== 'graph') {
+    if (message.type === 'graph') {
+      pathGraph = message.graph;
+      rebuildPaths();
       return;
     }
-    renderBreadcrumb();
+    navigation.receive(message);
   });
   // --- end breadcrumb feature ---
 
@@ -987,20 +1149,9 @@ export function initializeGraphWebview(): void {
   syncCopyPathButton();
   // --- end copy path feature ---
 
-  const disposeReplay = initializeReplayControls({
-    replay: document.getElementById('replay-path') as HTMLButtonElement,
-    box: document.getElementById('history')!,
-    slider: document.getElementById('history-slider') as HTMLInputElement,
-    previous: document.getElementById('history-prev') as HTMLButtonElement,
-    next: document.getElementById('history-next') as HTMLButtonElement,
-    label: document.getElementById('history-label')!,
-  }, window, path => {
-    window.dispatchEvent(new MessageEvent('message', {
-      data: { type: 'debugPath', path } satisfies GraphMessage,
-    }));
-  }, path => renderer.highlightPath(path), id => cy.getElementById(id).isNode());
   window.addEventListener('unload', () => {
-    disposeReplay();
+    navigation.dispose();
+    nodePills.dispose();
     truncationMarkers.dispose();
     if (outlineFrame !== undefined) cancelAnimationFrame(outlineFrame);
     cy.off('viewport resize position add remove style', scheduleRecursionOutlines);

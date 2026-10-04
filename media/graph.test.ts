@@ -12,6 +12,8 @@ import { recursionAnnouncement, recursionColor, recursionOutlines } from './recu
 import { truncationMarkerCases } from './truncationMarkers.test';
 import { exploreLayoutCases } from './exploreLayout.test';
 import { sessionReplayCases } from './sessionReplay.test';
+import { uiNavigationCases } from './uiNavigation.test';
+import { pathNavigationCases } from './pathNavigation.test';
 
 const fixture: GraphData = {
   targetIds: ['t'],
@@ -30,6 +32,8 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
   ...truncationMarkerCases,
   ...exploreLayoutCases,
   ...sessionReplayCases,
+  ...uiNavigationCases,
+  ...pathNavigationCases,
   ...['test5/python', 'test5/c'].map(fixtureName => [
     `${fixtureName}: direct, mutual and three-function recursion display and live depth`,
     (cy: Core, renderer: GraphRenderer) => {
@@ -138,7 +142,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     renderer.renderGraph(graph);
     assert.equal(renderer.visibleChokepointCount, 2);
     assert.equal(cy.$id('a').style('label'), '◇ a');
-    assert.equal(cy.$id('t').style('label'), '◇ t\nTarget');
+    assert.equal(cy.$id('t').style('label'), '◇ t');
     for (const id of ['root', 'b', 'other']) {
       assert.equal(cy.$id(id).hasClass('chokepoint'), false);
       assert.equal(cy.$id(id).style('label'), id);
@@ -151,10 +155,10 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
       fill: cy.$id(id).style('background-color'), underlay: cy.$id(id).style('underlay-color'),
     }));
     const before = appearance();
-    assert.equal(cy.$id('t').style('label'), '◇ t\n(x=3)\nTarget\nYou are here');
+    assert.equal(cy.$id('t').style('label'), '◇ t\n(x=3)');
     renderer.renderGraph({ ...graph, nodes: graph.nodes.map(node => ({ ...node, chokepoint: false })) });
     assert.deepEqual(appearance(), before);
-    assert.equal(cy.$id('t').style('label'), 't\n(x=3)\nTarget\nYou are here');
+    assert.equal(cy.$id('t').style('label'), 't\n(x=3)');
     assert.equal(renderer.visibleChokepointCount, 0);
   }],
   ...CASES.test8.map((expected, index) => [
@@ -841,7 +845,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
   }],
   ['target marker and longest-path rows are rendered without distance labels', (cy, renderer) => {
     assert.equal(cy.$id('t').hasClass('target'), true);
-    assert.equal(cy.$id('t').style('label'), 't\nTarget');
+    assert.equal(cy.$id('t').style('label'), 't');
     assert.ok(cy.$id('a').position('y') < cy.$id('b').position('y'));
     assert.equal(edge(cy, 'a', 't').hasClass('detour'), true);
     assert.equal(edge(cy, 'a', 't').style('curve-style'), 'bezier');
@@ -894,7 +898,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(incoming.hasClass('dimmed'), true);
     assert.equal(incoming.style('opacity'), '1');
     assert.equal(edge(cy, 'a', 't').style('line-color'), 'rgb(79,193,255)');
-    assert.equal(cy.$id('t').style('label'), 't\nTarget\nYou are here');
+    assert.equal(cy.$id('t').style('label'), 't');
     renderer.hoverNode();
     assert.equal(incoming.style('opacity'), '0.2');
     assert.equal(edge(cy, 'a', 't').style('width'), '4px');
@@ -946,13 +950,13 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(cy.$id('a').hasClass('has-args'), true);
     assert.equal(label('b'), 'b');
     renderer.highlightPath(['root', 'a']);
-    assert.equal(label('a'), 'a\n(x=3, y=4)\nYou are here');
+    assert.equal(label('a'), 'a\n(x=3, y=4)');
     renderer.renderGraph(fixture);
-    assert.equal(label('a'), 'a\n(x=3, y=4)\nYou are here');
+    assert.equal(label('a'), 'a\n(x=3, y=4)');
     assert.equal(renderer.callValue('a')?.atEntry, true);
     assert.equal(renderer.callValue('toString'), undefined);
     renderer.setCallValues({});
-    assert.equal(label('a'), 'a\nYou are here');
+    assert.equal(label('a'), 'a');
     assert.equal(cy.$('.has-args').length, 0);
   }],
   // --- end call values feature ---

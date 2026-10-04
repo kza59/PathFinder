@@ -305,26 +305,32 @@ export class PathFindPanel implements vscode.Disposable {
 </head>
 <body>
   <header>
-    <div><strong>PathFind</strong><span class="hint">Caller → callee · Longest paths to target · Hover to trace connections</span></div>
-    <div class="graph-controls">
       <form id="search-form" role="search" aria-label="Find a function in the graph">
-        <input id="search-input" type="search" placeholder="Find function" aria-label="Find function" aria-describedby="search-status" autocomplete="off" spellcheck="false">
-        <span id="search-count" hidden></span>
-        <button id="search-submit" type="submit" title="Search / next match (Enter)">Search</button>
-        <button id="search-previous" class="search-arrow" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)" disabled>&#8593;</button>
-        <button id="search-next" class="search-arrow" type="button" aria-label="Next match" title="Next match (Enter)" disabled>&#8595;</button>
+        <div class="search-field">
+          <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.5"/></svg>
+          <input id="search-input" type="text" placeholder="Go to function" role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list" aria-label="Go to function" aria-describedby="search-status" autocomplete="off" spellcheck="false">
+          <kbd aria-hidden="true">/</kbd>
+          <ul id="search-results" role="listbox" aria-label="Matching functions" hidden></ul>
+        </div>
+        <button id="search-submit" type="submit" hidden>Search</button>
+        <button id="search-previous" class="search-arrow" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)" disabled><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
+        <span id="search-count">0 results</span>
+        <button id="search-next" class="search-arrow" type="button" aria-label="Next match" title="Next match (Enter)" disabled><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
       </form>
-      <label class="noise-toggle"><input id="show-noise" type="checkbox"> Show Noise</label>
+    <div class="graph-controls">
+      <button id="fit" type="button">Fit Graph</button>
+      <button id="where-to-break" type="button" title="Find diamond-marked chokepoints for breakpoint suggestions"><span class="chokepoint-icon" aria-hidden="true">&#9671;</span> Suggest Breakpoint</button>
+      <label class="noise-toggle"><input id="show-noise" type="checkbox"> Show Noise Functions <span id="noise-count" class="control-count" hidden></span></label>
+      <button id="clear-highlights" type="button" title="Clear path and search highlights without changing the layout" disabled>Clear Highlights</button>
       <select id="layout-mode" aria-label="Graph layout">
         <option value="trace">Trace</option>
         <option value="explore">Explore</option>
       </select>
-      <button id="fit" type="button">Fit graph</button>
-      <button id="where-to-break" type="button" title="No visible chokepoints in this graph" disabled>Where to break</button>
     </div>
   </header>
   <main>
     <div id="graph" role="img" aria-label="Directed function call graph"></div>
+    <div id="node-pills" hidden></div>
     <div id="truncation-markers" hidden></div>
     <div id="recursion-outlines" aria-hidden="true" hidden></div>
     <div id="layout-labels" aria-hidden="true"></div>
@@ -334,10 +340,8 @@ export class PathFindPanel implements vscode.Disposable {
       <summary>Legend</summary>
       <ul>
         <li><span class="swatch node" aria-hidden="true"></span>Function</li>
-        <li><span class="swatch node target" aria-hidden="true"></span>Selected target</li>
         <li><span class="swatch chokepoint" aria-hidden="true">&#9671;</span>Chokepoint / breakpoint suggestion</li>
         <li><span class="swatch node path" aria-hidden="true"></span>On current call path</li>
-        <li><span class="swatch node current" aria-hidden="true"></span>You are here</li>
         <li><span class="swatch node dimmed" aria-hidden="true"></span>Not on current path</li>
         <!-- --- breakpoint markers --- -->
         <li><span class="swatch node breakpoint" aria-hidden="true"></span>Has a breakpoint</li>
@@ -360,28 +364,27 @@ export class PathFindPanel implements vscode.Disposable {
     </details>
     <!-- --- end legend feature --- -->
   </main>
-  <footer>
+  <div class="sr-only">
     <span id="search-status" role="status" aria-live="polite">Enter a function name</span>
-    <!-- --- breadcrumb feature --- -->
-    <nav id="breadcrumb" aria-label="Current call path" hidden></nav>
-    <!-- --- end breadcrumb feature --- -->
-    <!-- --- copy path feature --- enabled by media/graph.ts while the breadcrumb shows a path -->
-    <button id="copy-path" type="button" title="Copy the current call path as text" disabled>Copy path</button>
-    <!-- --- end copy path feature --- -->
-    <!-- --- replay feature --- enabled for a live path or a completed session's recorded pauses -->
-    <button id="replay-path" type="button" title="Replay all recorded debugging steps" disabled>Replay</button>
-    <!-- --- end replay feature --- -->
-    <!-- --- session history --- shown by media/graph.ts once a debug session has been recorded -->
-    <div id="history" role="group" aria-label="Debug session history" hidden>
-      <button id="history-prev" type="button" title="Previous pause" aria-label="Previous pause" disabled>◀</button>
-      <input id="history-slider" type="range" min="0" max="0" step="1" value="0" aria-label="Pause in the recorded session" disabled>
-      <button id="history-next" type="button" title="Next pause" aria-label="Next pause" disabled>▶</button>
-      <span id="history-label" role="status" aria-live="polite"></span>
-    </div>
-    <!-- --- end session history --- -->
     <span id="runtime" role="status" aria-live="polite">No runtime path</span>
     <span id="recursion-banner" role="status" aria-live="polite" hidden></span>
     <span id="selection">Click a function to see its source location</span>
+  </div>
+  <footer>
+    <div class="path-row">
+      <div id="path-navigation" role="group" aria-label="Path and replay navigation">
+        <button id="path-previous" class="path-arrow" type="button" title="Previous path (Left arrow)" aria-label="Previous path" disabled><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
+        <span id="path-label" role="status" aria-live="polite">No paths</span>
+        <button id="path-next" class="path-arrow" type="button" title="Next path (Right arrow)" aria-label="Next path" disabled><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
+      </div>
+      <nav id="breadcrumb" aria-label="Displayed call path" hidden></nav>
+      <span id="path-placeholder">Select a path to preview</span>
+      <button id="copy-path" type="button" title="Copy the displayed call path as text" disabled>Copy Path</button>
+    </div>
+    <div class="debug-row">
+      <button id="return-to-debug" type="button" disabled>Current Debug Path</button>
+      <button id="replay-path" type="button" title="Replay the displayed path" aria-pressed="false" disabled>Replay</button>
+    </div>
   </footer>
   <script nonce="${nonce}" src="${script}"></script>
 </body>

@@ -89,7 +89,9 @@ Chokepoints have a small ◇ beside their function name. **Where to break** focu
 a chokepoint at a readable zoom, starting closest to the target. Use the search
 bar's result counter and previous/next arrows (or Enter / Shift+Enter in the
 search field) to cycle through all visible chokepoints. Typing a function name
-returns to normal search. The button is disabled when no visible chokepoints exist.
+returns to normal search. The button opens the dropdown and focuses the search
+field; clicking it again advances to the next suggestion. When no visible
+chokepoints exist, the dropdown explains that no suggestion was found.
 
 To check **Chokepoint Marker** and **Where to Break**, open `test8/chain.py` and
 run **PathFind** on `target`. The intermediate chain functions should have ◇
