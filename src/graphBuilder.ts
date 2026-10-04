@@ -26,6 +26,8 @@ export interface GraphEdge {
 export interface CallGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  /** Resolved functions selected by PathFind, independent of node order and recursion. */
+  targetIds?: string[];
 }
 
 export interface BuildOptions {
@@ -254,8 +256,9 @@ class GraphBuilder {
     }
   }
 
-  result(): CallGraph {
-    return markRecursion({ nodes: [...this.nodes.values()], edges: [...this.edges.values()] });
+  /** `targetIds`: the functions PathFind was run on, which the renderer lays the graph out around. */
+  result(targetIds?: string[]): CallGraph {
+    return markRecursion({ nodes: [...this.nodes.values()], edges: [...this.edges.values()], targetIds });
   }
 }
 
@@ -360,15 +363,17 @@ export async function buildCallGraph(
   const builder = new GraphBuilder(trace);
   prepared.forEach(item => builder.trace(`prepared: ${describeItem(item)}`));
   const frontier: Entry[] = [];
+  const targetIds = new Set<string>();
   for (const preparedItem of prepared) {
     const item = await builder.toDefinition(preparedItem);
     const { id, isNew } = await builder.addNode(item);
+    targetIds.add(id);
     if (isNew) {
       frontier.push({ item, id });
     }
   }
   await walkCallers(builder, frontier, maxDepth, maxNodes, token);
-  return builder.result();
+  return builder.result([...targetIds]);
 }
 
 /**
@@ -388,7 +393,7 @@ export async function expandCallers(
   const item = node && await itemForNode(node);
   if (!item) {
     builder.trace(`expand: no call hierarchy item for ${nodeId}`);
-    return builder.result();
+    return builder.result(graph.targetIds);
   }
 
   builder.clearHiddenCallers(nodeId);
@@ -406,5 +411,5 @@ export async function expandCallers(
   await expandLevel(builder, stale, false, maxNodes, hidden);
   hidden.forEach((callers, id) => builder.setHiddenCallers(id, callers.size));
 
-  return builder.result();
+  return builder.result(graph.targetIds);
 }

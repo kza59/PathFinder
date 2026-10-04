@@ -72,7 +72,7 @@ both slash styles, displays the filename and line in its footer, and returns
 the original file string on clicks. It never derives identity from file paths.
 
 ```ts
-import { PathFindPanel } from './PathFindPanel';
+import { PathFindPanel } from './webview/PathFindPanel';
 import type { GraphData, DebugPath } from './types';
 
 const panel = PathFindPanel.createOrShow(context.extensionUri);
@@ -95,15 +95,38 @@ function as current. An empty path clears runtime styling.
 The renderer source is `media/graph.ts`. `npm run compile` type-checks both the
 extension and webview, then bundles Cytoscape and the renderer into
 `out/webview/graph.js`. The webview loads this local bundle with a content
-security policy and no CDN. Layout settings are isolated in `layoutOptions`;
-the built-in breadthfirst layout flows downward, using its maximal adjustment
-on acyclic graphs to place callees below all their callers. Recursive graphs
-use the ordinary breadthfirst layout because cycles cannot all point downward.
+security policy and no CDN. Graphs carry `targetIds` identifying the resolved
+functions selected with PathFind. `src/webview/targetLayout.ts` computes longest
+directed path depths to those targets, treating each selected target as a path
+endpoint. Recursive components are grouped into one level so cycles have finite
+depth; self calls add no depth. The renderer uses a preset layout with deeper
+callers above their callees. `<module>` nodes are pinned in the top row and `main`
+nodes in the next row (or the top row when there are no module nodes), overriding
+their computed depth. These entry nodes cannot be dragged. Other targets sit at
+the bottom. Ordering within each row reduces crossings and stays deterministic.
+Calls within a recursive group curve around the row, while shortcuts and return
+calls use outer lanes. No call-distance labels are displayed along the left side.
+Nodes without
+a directed path to any target appear in a separate labeled area. Older payloads
+without `targetIds` infer sink functions, ignoring self calls; graphs consisting
+only of cycles between different functions need explicit targets.
+
+Hover a function to emphasize its immediate callers and callees. Incoming calls
+are green, outgoing calls orange, and unrelated connections fade. Highlighted
+edges draw above ordinary edges while staying beneath nodes. The tooltip shows
+the longest path depth and counts of distinct callers and callees in this graph.
+Runtime path edges keep their blue color during hover, and leaving the function
+restores the latest runtime styling. Hover, runtime updates, and resizing preserve
+node positions; pan, zoom, drag, and graph replacement clear hover. The selected
+function's `Target` marker remains distinct from the debugger's `You are here`.
+
+`npm run test:unit` runs recursion tests, target-distance layout tests, and
+headless Cytoscape renderer tests, including hover/runtime overlap. To run only
+the renderer checks, use `npm run test:renderer`.
 
 For development, use `npm run watch` for the extension and `npm run watch:webview`
 in a second terminal for the webview. Run `npm run compile` for full type checks.
-The existing graph-building command is unchanged. Integration TODOs are to call
-the panel with its real graph, forward runtime paths when debugger integration
-lands, and optionally handle clicks for source navigation. Temporary commands
-are isolated in `src/graphRendererTest.ts`; their registration is one line in
+The PathFind command renders real graphs, debugger updates highlight runtime
+paths, and clicking a function opens its source. Temporary preview commands
+are isolated in `src/test/graphRendererTest.ts`; their registration is one line in
 `src/extension.ts`.

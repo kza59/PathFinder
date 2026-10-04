@@ -129,21 +129,25 @@ export class PathFindPanel implements vscode.Disposable {
 </head>
 <body>
   <header>
-    <div><strong>PathFind</strong><span class="hint">Caller → callee</span></div>
+    <div><strong>PathFind</strong><span class="hint">Caller → callee · Longest paths to target · Hover to trace connections</span></div>
     <button id="fit" type="button">Fit graph</button>
   </header>
   <main>
     <div id="graph" role="img" aria-label="Directed function call graph"></div>
+    <div id="layout-labels" aria-hidden="true"></div>
     <p id="empty">Waiting for graph data…</p>
     <!-- --- legend feature --- swatch colors are filled in from graphStyles() by media/graph.ts -->
-    <details id="legend" open>
+    <details id="legend">
       <summary>Legend</summary>
       <ul>
         <li><span class="swatch node" aria-hidden="true"></span>Function</li>
+        <li><span class="swatch node target" aria-hidden="true"></span>Selected target</li>
         <li><span class="swatch node path" aria-hidden="true"></span>On current call path</li>
         <li><span class="swatch node current" aria-hidden="true"></span>You are here</li>
         <li><span class="swatch node dimmed" aria-hidden="true"></span>Not on current path</li>
         <li><span class="swatch edge" aria-hidden="true"></span>Calls (caller → callee)</li>
+        <li><span class="swatch edge incoming" aria-hidden="true"></span>Calls hovered function</li>
+        <li><span class="swatch edge outgoing" aria-hidden="true"></span>Called by hovered function</li>
       </ul>
     </details>
     <!-- --- end legend feature --- -->

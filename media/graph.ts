@@ -1,43 +1,49 @@
 import cytoscape, { type Core, type ElementDefinition, type NodeSingular, type StylesheetJson } from 'cytoscape';
 import { fileName } from '../src/webview/filePath';
+import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
 import type { DebugPath, GraphData, GraphMessage, GraphNode, WebviewMessage } from '../src/types';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
 
 export const layoutOptions = {
-  name: 'breadthfirst' as const,
-  directed: true,
-  direction: 'downward' as const,
-  circle: false,
-  padding: 40,
-  spacingFactor: 1.1,
-  avoidOverlap: true,
-  nodeDimensionsIncludeLabels: true,
+  name: 'preset' as const,
+  padding: 80,
   animate: false,
-  depthSort: (first: NodeSingular | null, second: NodeSingular | null) =>
-    String(first?.data('label') ?? '').localeCompare(String(second?.data('label') ?? '')),
 };
+
+const nodeLabel = (node: NodeSingular): string => [
+  node.data('label'),
+  ...(node.hasClass('target') ? ['Target'] : []),
+  ...(node.hasClass('current') ? ['You are here'] : []),
+].join('\n');
 
 export function graphStyles(foreground = '#d4d4d4', background = '#252526'): StylesheetJson {
   return [
     {
       selector: 'node',
       style: {
-        label: 'data(label)',
+        label: nodeLabel,
         shape: 'round-rectangle',
-        width: 150,
-        height: 64,
+        width: NODE_WIDTH,
+        height: NODE_HEIGHT,
         'background-color': background,
         'border-color': '#5d8db5',
         'border-width': 2,
         color: foreground,
-        'font-size': '16px',
+        'font-size': '14px',
         'font-weight': 'bold',
         'text-valign': 'center',
         'text-halign': 'center',
         'text-wrap': 'wrap',
-        'text-max-width': '135px',
+        'text-max-width': `${NODE_WIDTH - 20}px`,
         'overlay-opacity': 0,
+      },
+    },
+    {
+      selector: 'node.target',
+      style: {
+        'border-color': '#c586c0', 'border-width': 3,
+        'underlay-color': '#c586c0', 'underlay-opacity': 0.15, 'underlay-padding': 8,
       },
     },
     {
@@ -51,6 +57,30 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
         'source-arrow-shape': 'none',
         'arrow-scale': 1.3,
         'overlay-opacity': 0,
+      },
+    },
+    {
+      selector: 'edge:loop',
+      style: { 'control-point-step-size': 110, 'loop-direction': '90deg', 'loop-sweep': '-75deg' },
+    },
+    {
+      selector: 'edge.same-row',
+      style: {
+        'curve-style': 'unbundled-bezier',
+        'control-point-distances': 'data(controlDistances)',
+        'control-point-weights': 'data(controlWeights)',
+        'edge-distances': 'node-position',
+      },
+    },
+    {
+      selector: 'edge.detour',
+      style: {
+        'curve-style': 'bezier',
+        'line-style': 'dashed',
+        width: 1.5,
+        opacity: 0.35,
+        'line-color': '#8196aa',
+        'target-arrow-color': '#8196aa',
       },
     },
     {
@@ -68,7 +98,6 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
     {
       selector: 'node.current',
       style: {
-        label: (node: NodeSingular) => `${node.data('label')}\nYou are here`,
         'border-color': '#e5c07b',
         'border-width': 5,
         'border-style': 'double',
@@ -78,11 +107,45 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
       selector: 'node:selected',
       style: { 'underlay-color': '#4fc1ff', 'underlay-opacity': 0.2, 'underlay-padding': 8 },
     },
+    {
+      selector: 'node.hover-faded',
+      style: { opacity: 0.4 },
+    },
+    {
+      selector: 'edge.hover-faded',
+      style: { opacity: 0.08 },
+    },
+    {
+      selector: 'node.hover-neighbor, node.hovered',
+      style: { opacity: 1 },
+    },
+    {
+      selector: 'node.hovered',
+      style: { 'underlay-color': '#b5cea8', 'underlay-opacity': 0.3, 'underlay-padding': 10 },
+    },
+    {
+      selector: 'edge.hover-in',
+      style: { 'line-color': '#b5cea8', 'target-arrow-color': '#b5cea8' },
+    },
+    {
+      selector: 'edge.hover-out',
+      style: { 'line-color': '#ce9178', 'target-arrow-color': '#ce9178' },
+    },
+    {
+      selector: 'edge.path.hover-in, edge.path.hover-out',
+      style: { 'line-color': '#4fc1ff', 'target-arrow-color': '#4fc1ff' },
+    },
+    {
+      selector: 'edge.hover-in, edge.hover-out',
+      style: { opacity: 1, width: 5, 'arrow-scale': 1.6, 'z-index': 10 },
+    },
   ];
 }
 
 export class GraphRenderer {
   private path: DebugPath = [];
+  private hoveredId: string | undefined;
+  public layout: TargetLayout | undefined;
 
   constructor(
     private readonly cy: Core,
@@ -91,9 +154,16 @@ export class GraphRenderer {
   ) {}
 
   public renderGraph(graph: GraphData): void {
+    this.hoveredId = undefined;
+    this.layout = targetLayout(graph);
+    const layout = this.layout;
     const nodeIds = new Set(graph.nodes.map(node => node.id));
     const elements: ElementDefinition[] = graph.nodes.map(node => ({
-      group: 'nodes', data: { ...node },
+      group: 'nodes',
+      data: { ...node, distance: layout.distances.get(node.id) },
+      classes: layout.targetIds.has(node.id) ? 'target' : '',
+      position: layout.positions.get(node.id),
+      locked: layout.pinnedIds.has(node.id),
     }));
     graph.edges.forEach((edge, index) => {
       if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
@@ -103,8 +173,15 @@ export class GraphRenderer {
       while (nodeIds.has(edgeId)) {
         edgeId = `_${edgeId}`;
       }
+      const route = edgeRoute(edge.from, edge.to, layout, index);
       elements.push({
-        group: 'edges', data: { id: edgeId, source: edge.from, target: edge.to },
+        group: 'edges',
+        data: {
+          ...edge, id: edgeId, source: edge.from, target: edge.to,
+          controlDistances: route.controlDistances,
+          controlWeights: route.controlWeights ?? [0.5],
+        },
+        classes: route.kind === 'normal' ? '' : route.kind,
       });
     });
 
@@ -113,11 +190,9 @@ export class GraphRenderer {
       this.cy.add(elements);
     });
     if (this.cy.nodes().length) {
-      const acyclic = this.cy.elements().tarjanStronglyConnected().components.every(component =>
-        component.nodes().length === 1 && component.edges().length === 0,
-      );
-      const options = { ...layoutOptions, maximal: acyclic, acyclic };
-      this.cy.layout(options).run();
+      this.cy.layout({
+        ...layoutOptions, positions: Object.fromEntries(layout.positions),
+      }).run();
     }
     this.highlightPath(this.path);
     this.graphRendered(this.cy.nodes().length);
@@ -144,6 +219,7 @@ export class GraphRenderer {
           current.addClass('current');
         }
       }
+      this.applyHover();
     });
 
     const current = path.length ? this.cy.getElementById(path[path.length - 1]) : undefined;
@@ -152,6 +228,28 @@ export class GraphRenderer {
 
   public clearDebugPath(): void {
     this.highlightPath([]);
+  }
+
+  public hoverNode(id?: string): void {
+    const node = id === undefined ? undefined : this.cy.getElementById(id);
+    const nextId = node?.isNode() ? id : undefined;
+    if (this.hoveredId === nextId) return;
+    this.hoveredId = nextId;
+    this.cy.batch(() => this.applyHover());
+  }
+
+  private applyHover(): void {
+    this.cy.elements().removeClass('hover-faded hover-neighbor hovered hover-in hover-out');
+    if (this.hoveredId === undefined) return;
+    const node = this.cy.getElementById(this.hoveredId);
+    if (!node.isNode()) return;
+    const connections = node.connectedEdges();
+    this.cy.elements().addClass('hover-faded');
+    connections.connectedNodes().removeClass('hover-faded').addClass('hover-neighbor');
+    node.removeClass('hover-faded').addClass('hovered');
+    connections.removeClass('hover-faded');
+    connections.filter(edge => edge.target().id() === node.id()).addClass('hover-in');
+    connections.filter(edge => edge.source().id() === node.id()).addClass('hover-out');
   }
 }
 
@@ -177,11 +275,28 @@ export function initializeGraphWebview(): void {
     empty.hidden = count > 0;
     empty.textContent = 'No functions in this graph';
     selection.textContent = 'Click a function to see its source location';
+    renderLayoutLabels();
   }, (current, active) => {
     runtime.textContent = current
       ? `You are here: ${current.label} · ${fileName(current.file)}:${current.line}`
       : active ? 'Current function is outside this graph' : 'No runtime path';
   });
+
+  const layoutLabels = document.getElementById('layout-labels')!;
+  const renderLayoutLabels = () => {
+    layoutLabels.replaceChildren();
+    const zoom = cy.zoom();
+    const pan = cy.pan();
+    for (const annotation of renderer.layout?.annotations ?? []) {
+      const label = layoutLabels.appendChild(document.createElement('span'));
+      label.textContent = annotation.label;
+      label.style.left = `${annotation.x * zoom + pan.x}px`;
+      label.style.top = `${annotation.y * zoom + pan.y}px`;
+      label.style.fontSize = `${Math.max(9, Math.min(13, 12 * zoom))}px`;
+      label.hidden = zoom < 0.25;
+    }
+  };
+  cy.on('viewport resize', renderLayoutLabels);
 
   cy.on('tap', 'node', event => {
     const node = event.target.data() as GraphNode;
@@ -203,6 +318,8 @@ export function initializeGraphWebview(): void {
   const tooltipFile = tooltip.appendChild(document.createElement('div'));
   const tooltipLines = tooltip.appendChild(document.createElement('div'));
   tooltipLines.className = 'tooltip-lines';
+  const tooltipConnections = tooltip.appendChild(document.createElement('div'));
+  const tooltipDistance = tooltip.appendChild(document.createElement('div'));
   tooltipHost.appendChild(tooltip);
 
   const TOOLTIP_OFFSET = 14;
@@ -225,15 +342,25 @@ export function initializeGraphWebview(): void {
   };
   const hideTooltip = () => {
     tooltip.hidden = true;
+    renderer.hoverNode();
   };
 
   cy.on('mouseover', 'node', event => {
     const node = event.target.data() as GraphNode;
+    renderer.hoverNode(node.id);
     tooltipName.textContent = node.label;
     tooltipFile.textContent = fileName(node.file);
     tooltipLines.textContent = node.endLine > node.line
       ? `lines ${node.line}–${node.endLine}`
       : `line ${node.line}`;
+    const distance = renderer.layout?.distances.get(node.id);
+    tooltipDistance.textContent = distance === undefined
+      ? (renderer.layout?.targetIds.size ? 'No path to target' : 'No target identified')
+      : renderer.layout?.targetIds.has(node.id) ? 'Selected target' : `Longest path depth: ${distance}`;
+    const element = cy.getElementById(node.id);
+    const callers = element.incomers('node').length;
+    const callees = element.outgoers('node').length;
+    tooltipConnections.textContent = `${callers} ${callers === 1 ? 'caller' : 'callers'} · ${callees} ${callees === 1 ? 'callee' : 'callees'}`;
     tooltip.hidden = false;
     moveTooltip(event.renderedPosition.x, event.renderedPosition.y);
   });
@@ -270,6 +397,9 @@ export function initializeGraphWebview(): void {
     '--pf-current': styleValue('node.current', 'border-color'),
     '--pf-dimmed': styleValue('.dimmed', 'opacity'),
     '--pf-edge': styleValue('edge', 'line-color'),
+    '--pf-target': styleValue('node.target', 'border-color'),
+    '--pf-hover-in': styleValue('edge.hover-in', 'line-color'),
+    '--pf-hover-out': styleValue('edge.hover-out', 'line-color'),
   };
   for (const [name, value] of Object.entries(legendColors)) {
     document.documentElement.style.setProperty(name, value);
@@ -277,7 +407,7 @@ export function initializeGraphWebview(): void {
   // --- end legend feature ---
   document.getElementById('fit')!.addEventListener('click', () => {
     if (cy.nodes().length) {
-      cy.fit(undefined, 40);
+      cy.fit(undefined, layoutOptions.padding);
     }
   });
   const observer = new ResizeObserver(() => cy.resize());
