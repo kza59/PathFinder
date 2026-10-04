@@ -1,5 +1,4 @@
 def leaf(value):
-    
     return value
 
 

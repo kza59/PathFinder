@@ -12,6 +12,7 @@ export interface Case {
   nodes: string[];
   edges: ExpectedEdge[];
   recursionGroups?: string[][]; // node ids that form each recursive structure; omitted = no recursion expected
+  noise?: string[]; // node ids expected to be tagged noise, besides <module> nodes (always noise); omitted = none
 }
 
 interface ReadmeLines {
@@ -196,6 +197,45 @@ export const CASES: Record<string, Case[]> = {
         ['main.py::<module>', 'main.py::main', [11]],
       ],
       recursionGroups: [['recursion.py::countdown']],
+    },
+  ],
+  // Neither Pylance nor the C/C++ extension reports creating an object (`Service()`, `Service service;`) as a call
+  // to its constructor, so constructors appear without callers. latest() contains "test" but is not test code.
+  'test7/python': [
+    {
+      name: 'noise: <module>, __init__ and test code are tagged; ordinary functions are not',
+      file: 'target.py', lineContains: 'def target', symbol: 'target',
+      nodes: ['target.py::target', 'service.py::Service.__init__', 'service.py::Service.run', 'service.py::latest',
+        'tests/test_target.py::test_target', 'tests/helpers.py::call_target', 'main.py::main', 'main.py::<module>'],
+      edges: [
+        ['service.py::Service.__init__', 'target.py::target', [6]],
+        ['service.py::Service.run', 'target.py::target', [9]],
+        ['service.py::latest', 'target.py::target', [13]],
+        ['tests/test_target.py::test_target', 'target.py::target', [5]],
+        ['tests/helpers.py::call_target', 'target.py::target', [5]],
+        ['main.py::main', 'service.py::Service.run', [5]],
+        ['main.py::main', 'service.py::latest', [6]],
+        ['main.py::<module>', 'main.py::main', [10]],
+      ],
+      noise: ['service.py::Service.__init__', 'tests/test_target.py::test_target', 'tests/helpers.py::call_target', 'main.py::<module>'],
+    },
+  ],
+  'test7/cpp': [
+    {
+      name: 'noise: constructor, destructor and test code are tagged; ordinary functions are not',
+      file: 'target.cpp', lineContains: 'int target', symbol: 'target',
+      nodes: ['target.cpp::target', 'service.cpp::Service::Service', 'service.cpp::Service::~Service', 'service.cpp::Service::run',
+        'service.cpp::latest', 'tests/test_target.cpp::test_target', 'main.cpp::main'],
+      edges: [
+        ['service.cpp::Service::Service', 'target.cpp::target', [6]],
+        ['service.cpp::Service::~Service', 'target.cpp::target', [11]],
+        ['service.cpp::Service::run', 'target.cpp::target', [16]],
+        ['service.cpp::latest', 'target.cpp::target', [21]],
+        ['tests/test_target.cpp::test_target', 'target.cpp::target', [5]],
+        ['main.cpp::main', 'service.cpp::Service::run', [7]],
+        ['main.cpp::main', 'service.cpp::latest', [6]],
+      ],
+      noise: ['service.cpp::Service::Service', 'service.cpp::Service::~Service', 'tests/test_target.cpp::test_target'],
     },
   ],
   'test5/c': [

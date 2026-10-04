@@ -10,6 +10,7 @@ export interface GraphNode {
   line: number;     // 1-based line of the function name (same base as debugger frames)
   endLine: number;  // 1-based last line of the function body
   recursionGroup?: number; // set on nodes in a recursive structure; members of the same cycle share the number
+  noise?: true;            // usually uninteresting: top-level <module> code, constructors/destructors, tests
 }
 
 export interface GraphEdge {
@@ -30,6 +31,9 @@ export interface BuildOptions {
   token?: vscode.CancellationToken;
   trace?: (message: string) => void; // logs every language-server answer, for debugging missing callers
 }
+
+const CONSTRUCTOR_NAMES = new Set(['__init__', '__new__', '__del__']);
+const TEST_NAME = /^test(_|[A-Z]|$)/; // test_parse, testParse, test
 
 const C_LIKE_EXTENSIONS = new Set(['.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx']);
 
@@ -178,6 +182,39 @@ class GraphBuilder {
     return [...containers, leaf].join(separator);
   }
 
+  /** Top-level code, constructors/destructors and test code: real callers, but rarely what "how did we get here" is after. */
+  private async isNoise(item: vscode.CallHierarchyItem, label: string): Promise<boolean> {
+    const segments = label.split(/::|\./);
+    const name = segments[segments.length - 1];
+    const owner = segments[segments.length - 2];
+    if (label === MODULE_NAME || CONSTRUCTOR_NAMES.has(name) || name.startsWith('~') || name === owner) {
+      return true; // <module>, __init__/__new__/__del__, C++ ~Dog, and C++ Dog::Dog
+    }
+    if (item.kind === vscode.SymbolKind.Constructor || (await this.outlineSymbol(item))?.kind === vscode.SymbolKind.Constructor) {
+      return true;
+    }
+    // Tests, judged by the path inside the workspace so a project that itself lives under ~/tests isn't all noise.
+    const relative = vscode.workspace.asRelativePath(item.uri, false).replace(/\\/g, '/').toLowerCase();
+    const folders = relative.split('/').slice(0, -1);
+    const file = relative.split('/').pop() ?? '';
+    return TEST_NAME.test(name) || (owner !== undefined && /^Test/.test(owner))
+      || folders.some(f => f === 'test' || f === 'tests')
+      || /^test_|_test\.[^.]+$|\.(test|spec)\.[^.]+$/.test(file);
+  }
+
+  /** The outline symbol whose name sits at this item's position, if the language server provides one. */
+  private async outlineSymbol(item: vscode.CallHierarchyItem): Promise<vscode.DocumentSymbol | undefined> {
+    const find = (symbols: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
+      for (const symbol of symbols) {
+        if (symbol.range.contains(item.selectionRange.start)) {
+          return find(symbol.children) ?? (symbol.selectionRange.contains(item.selectionRange.start) ? symbol : undefined);
+        }
+      }
+      return undefined;
+    };
+    return find(await this.documentSymbols(item.uri));
+  }
+
   /** Returns the node id for `item`, creating the node the first time. `isNew` tells the caller to keep walking. */
   async addNode(item: vscode.CallHierarchyItem): Promise<{ id: string; isNew: boolean }> {
     const location = `${item.uri.toString()}#${item.selectionRange.start.line}`;
@@ -199,6 +236,7 @@ class GraphBuilder {
       file: item.uri.fsPath,
       line: item.selectionRange.start.line + 1,
       endLine: await this.definitionEndLine(item),
+      ...(await this.isNoise(item, label) ? { noise: true as const } : {}),
     });
     return { id, isNew: true };
   }
