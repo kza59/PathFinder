@@ -4,6 +4,12 @@ import { CALL_VALUES_DEBUG_TYPES, CallValuesCapture, RESUME_COMMANDS } from './c
 import { findNodeForFrame } from './graphBuilder';
 import type { DebugPath, GraphData } from './types';
 import { PathFindPanel } from './webview/PathFindPanel';
+import type { SessionHistoryTap } from './sessionHistory'; // session history (type only: no runtime import)
+
+// --- session history ---
+/** Set by registerSessionHistory (src/sessionHistory.ts); unset, sessions are not recorded. */
+export const sessionHistoryHook: { tap?: (session: vscode.DebugSession) => SessionHistoryTap } = {};
+// --- end session history ---
 
 // Minimal slices of the Debug Adapter Protocol types we touch (avoids a dependency).
 interface DapFrame {
@@ -20,7 +26,7 @@ interface DapMessage {
   request_seq?: number;
   success?: boolean;
   arguments?: { threadId?: number; startFrame?: number };
-  body?: { threadId?: number; stackFrames?: DapFrame[] };
+  body?: { threadId?: number; stackFrames?: DapFrame[]; reason?: string }; // reason: session history
 }
 
 /** Send the live path to the webview. Path is OUTER CALLER FIRST, current function LAST. */
@@ -45,7 +51,8 @@ export function registerDebugTracker(context: vscode.ExtensionContext): void {
           if (!trackedSessions.has(session.id)) return;
           highlightedSessionId = session.id;
           sendHighlight(resolveDebugPath(frames, getGraph()));
-        }, createCallValuesCapture(session)); // call values feature
+        }, createCallValuesCapture(session), // call values feature
+        sessionHistoryHook.tap?.(session)); // session history
       },
     }),
     vscode.debug.onDidTerminateDebugSession(session => {
@@ -107,6 +114,7 @@ export function createTracker(
   onFramesChanged: (frames: DapFrame[]) => void = frames =>
     sendHighlight(resolveDebugPath(frames, getGraph())),
   callValues?: CallValuesCapture, // call values feature
+  history?: SessionHistoryTap, // session history
 ): vscode.DebugAdapterTracker {
   // VS Code fetches the stack in PAGES: first just the top frame (startFrame 0, levels 1),
   // then the rest (startFrame 1, ...). So we remember each stackTrace request's arguments
@@ -137,6 +145,7 @@ export function createTracker(
       if (msg.type === 'event' && msg.event === 'stopped') {
         stoppedThreadId = msg.body?.threadId;
         callValues?.paused(); // call values feature
+        history?.paused(msg.body?.reason); // session history: breakpoint, step, exception, ...
         return;
       }
       // --- call values feature ---
@@ -163,6 +172,7 @@ export function createTracker(
       frames = frames.slice(0, req.startFrame).concat(page);
       onFramesChanged(frames);
       callValues?.framesChanged(frames); // call values feature
+      history?.framesChanged(frames); // session history: updates this pause's step in place
     },
 
     onExit: () => callValues?.ended(), // call values feature

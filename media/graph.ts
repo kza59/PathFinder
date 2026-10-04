@@ -7,7 +7,7 @@ import { recursionAnnouncement, recursionColor, recursionOutlines } from './recu
 import { recursionDepth, type RecursionDepth } from '../src/recursion';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
-import type { BreakpointCounts, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, WebviewMessage } from '../src/types';
+import type { BreakpointCounts, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HistoryStep, HotCounts, WebviewMessage } from '../src/types';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
 
@@ -20,6 +20,14 @@ const BREAKPOINT_DOT = `data:image/svg+xml;utf8,${encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="${BREAKPOINT_COLOR}" stroke="#ffffff" stroke-width="1.5"/></svg>`,
 )}`;
 // --- end breakpoint markers ---
+
+// --- session history ---
+/** "Step 7 of 41 · sum.py:2 sum (step)"; notes steps dropped over the recording cap. */
+export function historyStepLabel(step: HistoryStep, index: number, count: number, dropped = 0): string {
+  const where = step.where ? `${fileName(step.where.file)}:${step.where.line} ${step.where.name}` : '(no source)';
+  return `Step ${index + 1} of ${count} · ${where} (${step.reason})${dropped ? ` · ${dropped} older dropped` : ''}`;
+}
+// --- end session history ---
 
 export const layoutOptions = {
   name: 'preset' as const,
@@ -1032,6 +1040,69 @@ export function initializeGraphWebview(): void {
   });
   replayButton.disabled = breadcrumb.hidden;
   // --- end replay feature ---
+
+  // --- session history ---
+  // Scrubs through the pauses of the last debug session. Showing a step dispatches a synthetic
+  // debugPath message, so the renderer (highlightPath), breadcrumb, copy path and replay all treat
+  // it exactly like a live pause: no duplicated highlight logic, and Replay replays the shown step.
+  // Read-only while a session is recording, so it never fights the live highlight.
+  const historyBox = document.getElementById('history')!;
+  const historySlider = document.getElementById('history-slider') as HTMLInputElement;
+  const historyPrev = document.getElementById('history-prev') as HTMLButtonElement;
+  const historyNext = document.getElementById('history-next') as HTMLButtonElement;
+  const historyLabel = document.getElementById('history-label')!;
+  let historySteps: HistoryStep[] = [];
+  let historyDropped = 0;
+  let historyIndex = -1; // -1: no step shown yet
+  const syncHistoryControls = () => {
+    const usable = historySteps.length > 0;
+    historySlider.disabled = !usable;
+    historyPrev.disabled = !usable || historyIndex === 0;
+    historyNext.disabled = !usable || historyIndex === historySteps.length - 1;
+  };
+  const showHistoryStep = (index: number) => {
+    if (!historySteps.length) return;
+    historyIndex = Math.max(0, Math.min(index, historySteps.length - 1));
+    historySlider.value = String(historyIndex);
+    historyLabel.textContent = historyStepLabel(historySteps[historyIndex], historyIndex, historySteps.length, historyDropped);
+    syncHistoryControls();
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'debugPath', path: [...historySteps[historyIndex].path] } satisfies GraphMessage,
+    }));
+  };
+  historySlider.addEventListener('input', () => showHistoryStep(Number(historySlider.value)));
+  // From "nothing shown", Previous starts at the last pause and Next at the first.
+  historyPrev.addEventListener('click', () => showHistoryStep(historyIndex < 0 ? historySteps.length - 1 : historyIndex - 1));
+  historyNext.addEventListener('click', () => showHistoryStep(historyIndex < 0 ? 0 : historyIndex + 1));
+  window.addEventListener('message', (event: MessageEvent<GraphMessage>) => {
+    const message = event.data;
+    if (!message || typeof message !== 'object' || message.type !== 'sessionHistory') {
+      return;
+    }
+    historyBox.hidden = false;
+    historyDropped = message.dropped;
+    if (message.state === 'recording') {
+      historySteps = [];
+      historyIndex = -1;
+      historyLabel.textContent = `Recording… ${message.count} ${message.count === 1 ? 'pause' : 'pauses'}`;
+      syncHistoryControls();
+      return;
+    }
+    historySteps = message.steps;
+    historySlider.max = String(Math.max(0, historySteps.length - 1));
+    if (!historySteps.length) {
+      historyIndex = -1;
+      historyLabel.textContent = 'Session ended · no pauses recorded';
+    } else if (historyIndex >= 0) {
+      showHistoryStep(historyIndex); // re-sent for a new graph: re-show the same step on it
+      return;
+    } else {
+      historySlider.value = String(historySteps.length - 1);
+      historyLabel.textContent = `Session ended · ${historySteps.length} ${historySteps.length === 1 ? 'pause' : 'pauses'} recorded · drag to scrub`;
+    }
+    syncHistoryControls();
+  });
+  // --- end session history ---
   window.addEventListener('unload', () => {
     stopReplay(); // replay feature
     truncationMarkers.dispose();

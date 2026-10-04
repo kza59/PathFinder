@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { expandCallers } from '../graphBuilder';
-import type { BreakpointCounts, CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage } from '../types';
+import type { BreakpointCounts, CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage, SessionHistoryMessage } from '../types';
 import { callerExpansionPreview } from './callerPreview';
 
 export class PathFindPanel implements vscode.Disposable {
@@ -20,6 +20,7 @@ export class PathFindPanel implements vscode.Disposable {
   // --- end hot-path counting ---
   private callValues: CallValues = {}; // call values feature
   private breakpoints: BreakpointCounts = {}; // breakpoint markers
+  private sessionHistory: SessionHistoryMessage | undefined; // session history
   private ready = false;
   private disposed = false;
   private expanding = false;
@@ -82,6 +83,11 @@ export class PathFindPanel implements vscode.Disposable {
             this.send({ type: 'breakpoints', counts: this.breakpoints });
           }
           // --- end breakpoint markers ---
+          // --- session history ---
+          if (this.sessionHistory) {
+            this.send(this.sessionHistory);
+          }
+          // --- end session history ---
         } else if (
           message.type === 'nodeClicked' &&
           'id' in message && typeof message.id === 'string' &&
@@ -214,6 +220,13 @@ export class PathFindPanel implements vscode.Disposable {
   }
   // --- end breakpoint markers ---
 
+  // --- session history ---
+  public setSessionHistory(message: SessionHistoryMessage): void {
+    this.sessionHistory = message;
+    this.send(message);
+  }
+  // --- end session history ---
+
   public get currentGraph(): GraphData | undefined {
     return this.graph;
   }
@@ -338,6 +351,14 @@ export class PathFindPanel implements vscode.Disposable {
     <!-- --- replay feature --- enabled by media/graph.ts while the breadcrumb shows a path -->
     <button id="replay-path" type="button" title="Replay the call path, outer caller to current function" disabled>Replay</button>
     <!-- --- end replay feature --- -->
+    <!-- --- session history --- shown by media/graph.ts once a debug session has been recorded -->
+    <div id="history" role="group" aria-label="Debug session history" hidden>
+      <button id="history-prev" type="button" title="Previous pause" aria-label="Previous pause" disabled>◀</button>
+      <input id="history-slider" type="range" min="0" max="0" step="1" value="0" aria-label="Pause in the recorded session" disabled>
+      <button id="history-next" type="button" title="Next pause" aria-label="Next pause" disabled>▶</button>
+      <span id="history-label" role="status" aria-live="polite"></span>
+    </div>
+    <!-- --- end session history --- -->
     <span id="runtime" role="status" aria-live="polite">No runtime path</span>
     <span id="recursion-banner" role="status" aria-live="polite" hidden></span>
     <span id="selection">Click a function to see its source location</span>
