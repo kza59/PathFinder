@@ -27,7 +27,29 @@ header {
   border-bottom: 1px solid var(--vscode-panel-border, #454545);
 }
 
+header > div { min-width: 0; }
+header button { flex: none; }
+
+#layout-labels {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+#layout-labels span {
+  position: absolute;
+  white-space: nowrap;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+  background: var(--vscode-editor-background, #1e1e1e);
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+
+#layout-labels span[hidden] { display: none; }
+
 .hint {
+  display: inline-block;
   margin-left: 14px;
   color: var(--vscode-descriptionForeground, #b0b0b0);
 }
@@ -169,6 +191,8 @@ footer {
   border-color: var(--pf-path);
 }
 
+#legend .swatch.node.target { border-color: var(--pf-target); border-width: 3px; }
+
 #legend .swatch.node.current {
   border: 5px double var(--pf-current);
 }
@@ -192,6 +216,9 @@ footer {
   border-bottom: 5px solid transparent;
   border-left: 7px solid var(--pf-edge);
 }
+
+#legend .swatch.edge.incoming { --pf-edge: var(--pf-hover-in); height: 4px; }
+#legend .swatch.edge.outgoing { --pf-edge: var(--pf-hover-out); height: 4px; }
 /* --- end legend feature --- */
 
 /* --- breadcrumb feature --- */

@@ -22,6 +22,8 @@ export interface GraphEdge {
 export interface CallGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  /** Resolved functions selected by PathFind, independent of node order and recursion. */
+  targetIds?: string[];
 }
 
 export interface BuildOptions {
@@ -215,8 +217,8 @@ class GraphBuilder {
     this.edges.set(key, edge);
   }
 
-  result(): CallGraph {
-    return markRecursion({ nodes: [...this.nodes.values()], edges: [...this.edges.values()] });
+  result(targetIds: string[]): CallGraph {
+    return markRecursion({ nodes: [...this.nodes.values()], edges: [...this.edges.values()], targetIds });
   }
 }
 
@@ -241,9 +243,11 @@ export async function buildCallGraph(
   prepared.forEach(item => builder.trace(`prepared: ${describeItem(item)}`));
   type Entry = { item: vscode.CallHierarchyItem; id: string };
   let frontier: Entry[] = [];
+  const targetIds = new Set<string>();
   for (const preparedItem of prepared) {
     const item = await builder.toDefinition(preparedItem);
     const { id, isNew } = await builder.addNode(item);
+    targetIds.add(id);
     if (isNew) {
       frontier.push({ item, id });
     }
@@ -285,5 +289,5 @@ export async function buildCallGraph(
     frontier = next;
   }
 
-  return builder.result();
+  return builder.result([...targetIds]);
 }

@@ -10,6 +10,7 @@ from workflow import runReports, runWorkflow
 
 
 def main():
+    
     results = {
         "sum": sum(1, 2),
         "calculateTotal": calculateTotal([1, 2, 3]),

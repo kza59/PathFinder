@@ -83,7 +83,7 @@ export function recursionDepth(path: string[], graph: CallGraph): RecursionDepth
  * Tarjan's algorithm, iterative so a long call chain can't overflow the stack.
  * Components come out ordered by each component's first node in `graph.nodes`.
  */
-function stronglyConnectedComponents(graph: CallGraph): string[][] {
+export function stronglyConnectedComponents(graph: CallGraph): string[][] {
   const callees = new Map<string, string[]>(graph.nodes.map(n => [n.id, []]));
   for (const edge of graph.edges) {
     callees.get(edge.from)?.push(edge.to);

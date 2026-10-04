@@ -33,6 +33,7 @@ export function registerGraphRendererTestCommands(context: vscode.ExtensionConte
           file: vscode.Uri.joinPath(context.extensionUri, 'test1', fileName(node.file)).fsPath,
         })),
         edges: mockGraph.edges,
+        targetIds: mockGraph.targetIds,
       });
     }),
     vscode.commands.registerCommand('pathfind.testDebugPath', () => {
