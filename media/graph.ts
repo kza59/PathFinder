@@ -582,14 +582,14 @@ export function initializeGraphWebview(): void {
     heatLegend.hidden = !range;
     if (range) {
       const equal = range.min === range.max;
-      heatLow.textContent = `${range.min.toLocaleString()}${equal ? ' calls' : ' (blue)'}`;
+      heatLow.textContent = `${range.min.toLocaleString()}${equal ? ' calls' : ' (yellow)'}`;
       heatHigh.textContent = equal ? 'Midpoint color' : `${range.max.toLocaleString()} (red)`;
       heatScale.style.background = equal
         ? heatColor(0.5, palette)
         : `linear-gradient(to right, ${heatColor(0, palette)}, ${heatColor(1, palette)})`;
       heatScale.setAttribute('aria-label', equal
         ? `All recorded functions have ${range.min} calls; midpoint color`
-        : `${range.min} calls in blue to ${range.max} calls in red`);
+        : `${range.min} calls in yellow to ${range.max} calls in red`);
       heatNote.textContent = equal
         ? 'Equal counts use the midpoint color.'
         : 'Linear scale for this graph; colors rescale as counts change.';

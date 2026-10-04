@@ -21,8 +21,8 @@ export function heatPalette(foreground: string): HeatPalette {
     ? (rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722) / 255
     : 1;
   return brightness > 0.5
-    ? { low: [36, 80, 139], high: [139, 48, 48] }
-    : { low: [184, 213, 242], high: [242, 184, 184] };
+    ? { low: [104, 88, 20], high: [139, 48, 48] }
+    : { low: [242, 224, 142], high: [242, 184, 184] };
 }
 
 /** Linear interpolation in RGB, shared by node fills and the legend gradient. */

@@ -439,7 +439,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), tracePositions);
     assert.equal(cy.$id('a').visible(), false);
   }],
-  ['heat uses actual count distances on a continuous blue-to-red scale, including equal counts', (cy, renderer) => {
+  ['heat uses actual count distances on a continuous yellow-to-red scale, including equal counts', (cy, renderer) => {
     renderer.setHotCounts({ root: 1, a: 2, b: 500, t: 1000, other: 2, unknown: 1000000 });
     assert.deepEqual(renderer.heatRange, { min: 1, max: 1000 });
     assert.equal(cy.$id('root').data('heatPosition'), 0);
@@ -447,7 +447,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(cy.$id('b').data('heatPosition'), 499 / 999);
     assert.equal(cy.$id('t').data('heatPosition'), 1);
     assert.equal(cy.$id('a').style('background-color'), cy.$id('other').style('background-color'));
-    assert.equal(cy.$id('root').style('background-color'), 'rgb(36,80,139)');
+    assert.equal(cy.$id('root').style('background-color'), 'rgb(104,88,20)');
     assert.equal(cy.$id('t').style('background-color'), 'rgb(139,48,48)');
     assert.notEqual(cy.$id('b').style('background-color'), cy.$id('root').style('background-color'));
     assert.notEqual(cy.$id('b').style('background-color'), cy.$id('t').style('background-color'));
