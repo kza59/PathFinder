@@ -1,5 +1,6 @@
 import cytoscape, { type Core, type ElementDefinition, type Layouts, type NodeSingular, type StylesheetJson } from 'cytoscape';
 import cola from 'cytoscape-cola';
+import { GraphSearch, type SearchState } from './graphSearch';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
 import type { DebugPath, GraphData, GraphMessage, GraphNode, WebviewMessage } from '../src/types';
@@ -144,6 +145,13 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
       selector: 'edge.hover-in, edge.hover-out',
       style: { opacity: 1, width: 5, 'arrow-scale': 1.6, 'z-index': 10 },
     },
+    {
+      selector: 'node.search-hit',
+      style: {
+        opacity: 1,
+        'overlay-color': '#4fc1ff', 'overlay-opacity': 0.25, 'overlay-padding': 12,
+      },
+    },
   ];
 }
 
@@ -154,13 +162,16 @@ export class GraphRenderer {
   private exploreLayout?: Layouts;
   private staticPositions = new Map<string, { x: number; y: number }>();
   public layout: TargetLayout | undefined;
+  public readonly search: GraphSearch;
 
   constructor(
     private readonly cy: Core,
     private readonly graphRendered: (nodeCount: number) => void = () => {},
     private readonly pathChanged: (current: GraphNode | undefined, active: boolean) => void = () => {},
+    searchChanged: (state: SearchState) => void = () => {},
   ) {
     this.cy.autoungrabify(true);
+    this.search = new GraphSearch(cy, searchChanged);
   }
 
   public get layoutMode(): LayoutMode {
@@ -221,10 +232,12 @@ export class GraphRenderer {
   }
 
   public dispose(): void {
+    this.search.dispose();
     this.stopExploreLayout();
   }
 
   public renderGraph(graph: GraphData): void {
+    this.search.clear();
     this.stopExploreLayout();
     this.hoveredId = undefined;
     this.layout = targetLayout(graph);
@@ -334,6 +347,11 @@ export function initializeGraphWebview(): void {
   const empty = document.getElementById('empty')!;
   const runtime = document.getElementById('runtime')!;
   const selection = document.getElementById('selection')!;
+  const searchInput = document.getElementById('search-input') as HTMLInputElement;
+  const searchCount = document.getElementById('search-count')!;
+  const searchStatus = document.getElementById('search-status')!;
+  const searchPrevious = document.getElementById('search-previous') as HTMLButtonElement;
+  const searchNext = document.getElementById('search-next') as HTMLButtonElement;
   const theme = getComputedStyle(document.body);
   const cy = cytoscape({
     container,
@@ -350,12 +368,39 @@ export function initializeGraphWebview(): void {
     empty.hidden = count > 0;
     empty.textContent = 'No functions in this graph';
     selection.textContent = 'Click a function to see its source location';
+    searchInput.value = '';
     renderLayoutLabels();
   }, (current, active) => {
     runtime.textContent = current
       ? `You are here: ${current.label} · ${fileName(current.file)}:${current.line}`
       : active ? 'Current function is outside this graph' : 'No runtime path';
+  }, state => {
+    searchCount.textContent = state.count ? `${state.index + 1} of ${state.count}` : 'No results';
+    searchCount.hidden = !state.query;
+    searchPrevious.disabled = searchNext.disabled = state.count === 0;
+    searchInput.setAttribute('aria-invalid', String(!!state.query && state.count === 0));
+    searchStatus.textContent = state.node
+      ? `${state.node.label} — ${fileName(state.node.file)}:${state.node.line}`
+      : state.query ? 'No matching functions' : 'Enter a function name';
+    searchStatus.title = state.node ? `${state.node.file}:${state.node.line}` : '';
   });
+
+  searchInput.addEventListener('input', () => renderer.search.find(searchInput.value));
+  document.getElementById('search-form')!.addEventListener('submit', event => {
+    event.preventDefault();
+    renderer.search.move(1);
+  });
+  searchInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && event.shiftKey) {
+      event.preventDefault();
+      renderer.search.move(-1);
+    } else if (event.key === 'Escape') {
+      searchInput.value = '';
+      renderer.search.clear();
+    }
+  });
+  searchPrevious.addEventListener('click', () => renderer.search.move(-1));
+  searchNext.addEventListener('click', () => renderer.search.move(1));
 
   const layoutLabels = document.getElementById('layout-labels')!;
   const renderLayoutLabels = () => {

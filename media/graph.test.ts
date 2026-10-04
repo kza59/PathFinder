@@ -3,6 +3,7 @@ import cytoscape, { type Core } from 'cytoscape';
 import { advanceAnimationFrames, pendingAnimationFrames } from './animationFrames.test';
 import { GraphRenderer, graphStyles } from './graph';
 import type { GraphData } from '../src/types';
+import { largeSearchGraph } from '../src/test/mockdata';
 
 const fixture: GraphData = {
   targetIds: ['t'],
@@ -12,7 +13,166 @@ const fixture: GraphData = {
 };
 const edge = (cy: Core, from: string, to: string) => cy.edges().filter(e => e.source().id() === from && e.target().id() === to);
 
-const cases: [string, (cy: Core, renderer: GraphRenderer) => void][] = [
+const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void>][] = [
+  ['search ranks exact names before partial names, ignores case, and cycles distinct duplicate IDs both ways', (cy, renderer) => {
+    const ids = ['C:/one.py::summary', 'C:/two.py::sum', 'C:/three.py::sum', 'C:/four.py::Consumer.sum'];
+    renderer.renderGraph({
+      nodes: ids.map((id, index) => ({ id, label: ['summary', 'Sum', 'sum', 'Consumer.sum'][index], file: id.split('::')[0], line: index + 1, endLine: 10 })),
+      edges: [],
+    });
+    const first = renderer.search.find('  SUM  ');
+    assert.equal(first.count, 4);
+    assert.equal(first.index, 0);
+    assert.equal(first.node?.id, ids[1]);
+    assert.equal(renderer.search.move(1).node?.id, ids[2]);
+    assert.equal(renderer.search.move(1).node?.id, ids[0]);
+    assert.equal(renderer.search.move(1).node?.id, ids[3]);
+    assert.equal(renderer.search.move(1).node?.id, ids[1]);
+    assert.equal(renderer.search.move(-1).node?.id, ids[3]);
+    assert.equal(cy.nodes('.search-hit').length, 1);
+    assert.equal(renderer.search.find('CONSUMER.SUM').node?.id, ids[3]);
+    assert.equal(renderer.search.find('onsumer').node?.id, ids[3]);
+  }],
+  ['empty, whitespace, and unmatched searches leave viewport and runtime styling unchanged', (cy, renderer) => {
+    renderer.highlightPath(['root', 'a', 't']);
+    cy.zoom(1.2); cy.pan({ x: 51, y: 32 });
+    const pan = { ...cy.pan() };
+    const before = cy.elements().map(e => ({ id: e.id(), classes: e.classes() }));
+    for (const query of ['', '  ', 'missing']) {
+      const state = renderer.search.find(query);
+      assert.equal(state.count, 0);
+      assert.equal(state.index, -1);
+      assert.equal(state.node, undefined);
+      renderer.search.move(1); renderer.search.move(-1);
+      assert.deepEqual(cy.pan(), pan);
+      assert.equal(cy.zoom(), 1.2);
+      assert.deepEqual(cy.elements().map(e => ({ id: e.id(), classes: e.classes() })), before);
+    }
+  }],
+  ['search and result cycling highlight fully visible nodes without changing the viewport', (cy, renderer) => {
+    // Give the headless graph a realistic viewport for visibility checks.
+    cy.width = () => 1000;
+    cy.height = () => 600;
+    renderer.renderGraph({
+      ...fixture,
+      nodes: fixture.nodes.map(node => ['a', 'b'].includes(node.id) ? { ...node, label: 'match' } : node),
+    });
+    cy.$id('a').position({ x: 200, y: 200 });
+    cy.$id('b').position({ x: 400, y: 200 });
+    renderer.highlightPath(['root', 'a', 't']);
+    cy.zoom(1.2); cy.pan({ x: 20, y: 30 });
+    const pan = { ...cy.pan() };
+    const events: string[] = [];
+    cy.on('viewport', event => events.push(event.type));
+    assert.equal(renderer.search.find('MATCH').node?.id, 'a');
+    assert.equal(renderer.search.move(1).node?.id, 'b');
+    assert.equal(renderer.search.move(-1).node?.id, 'a');
+    renderer.search.find('mat');
+    assert.deepEqual(cy.pan(), pan);
+    assert.equal(cy.zoom(), 1.2);
+    assert.deepEqual(events, []);
+    assert.equal(cy.$id('a').hasClass('search-hit'), true);
+    assert.equal(cy.$id('a').hasClass('path'), true);
+    assert.equal(cy.$id('t').hasClass('current'), true);
+  }],
+  ['search centers clipped nodes at every viewport edge even when their centers are visible', (cy, renderer) => {
+    cy.width = () => 1000;
+    cy.height = () => 600;
+    cy.zoom(1.2);
+    const node = cy.$id('a');
+    for (const rendered of [{ x: 5, y: 300 }, { x: 995, y: 300 }, { x: 500, y: 5 }, { x: 500, y: 595 }]) {
+      renderer.search.clear();
+      cy.pan({ x: rendered.x - node.position('x') * cy.zoom(), y: rendered.y - node.position('y') * cy.zoom() });
+      assert.ok(node.renderedPosition().x > 0 && node.renderedPosition().x < cy.width());
+      assert.ok(node.renderedPosition().y > 0 && node.renderedPosition().y < cy.height());
+      renderer.search.find('a');
+      assert.ok(Math.abs(node.renderedPosition().x - 500) < 0.001);
+      assert.ok(Math.abs(node.renderedPosition().y - 300) < 0.001);
+      assert.equal(cy.zoom(), 1.2);
+    }
+  }],
+  ['search centers an off-screen node in a large graph without layout, rebuilding, or moving nodes', (cy, renderer) => {
+    renderer.renderGraph(largeSearchGraph);
+    cy.zoom(1); cy.pan({ x: 10000, y: 10000 });
+    const nodes = cy.nodes().toArray();
+    const positions = nodes.map(node => ({ id: node.id(), ...node.position() }));
+    const distant = nodes.find(node => node.data('label') === 'distantFunction')!;
+    const initial = distant.renderedPosition();
+    assert.ok(initial.x < 0 || initial.x > cy.width() || initial.y < 0 || initial.y > cy.height());
+    const events: string[] = [];
+    cy.on('layoutstart add remove position', event => events.push(event.type));
+    const state = renderer.search.find('DISTANTFUNCTION');
+    assert.equal(state.node?.id, distant.id());
+    const rendered = distant.renderedPosition();
+    assert.ok(Math.abs(rendered.x - cy.width() / 2) < 0.001);
+    assert.ok(Math.abs(rendered.y - cy.height() / 2) < 0.001);
+    assert.equal(cy.zoom(), 1);
+    assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+    cy.nodes().forEach((node, index) => assert.equal(node, nodes[index]));
+    assert.deepEqual(events, []);
+  }],
+  ['search in Explore uses current positions and keeps its running simulation', (cy, renderer) => {
+    renderer.setLayoutMode('explore');
+    advanceAnimationFrames(10);
+    const node = cy.$id('a');
+    node.position({ x: 2000, y: 3000 });
+    const positions = cy.nodes().map(node => ({ id: node.id(), ...node.position() }));
+    const frames = pendingAnimationFrames();
+    let layouts = 0;
+    cy.on('layoutstart layoutstop', () => layouts++);
+    renderer.search.find('a');
+    assert.equal(renderer.layoutMode, 'explore');
+    assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+    assert.equal(layouts, 0);
+    assert.equal(pendingAnimationFrames(), frames);
+    assert.ok(frames > 0);
+  }],
+  ['temporary search highlight survives debug updates and restores the latest debug and hover appearance', async (cy, renderer) => {
+    renderer.highlightPath(['root', 'a', 't']);
+    renderer.hoverNode('a');
+    const currentBorder = cy.$id('t').style('border-color');
+    renderer.search.find('t');
+    assert.equal(cy.$id('t').style('border-color'), currentBorder);
+    renderer.search.find('other');
+    const other = cy.$id('other');
+    assert.equal(cy.$id('t').hasClass('search-hit'), false);
+    assert.equal(other.hasClass('dimmed'), true);
+    assert.equal(other.hasClass('hover-faded'), true);
+    assert.equal(other.style('opacity'), '1');
+    renderer.highlightPath(['b', 't']);
+    assert.equal(other.hasClass('search-hit'), true);
+    assert.equal(cy.$id('t').hasClass('current'), true);
+    await new Promise(resolve => setTimeout(resolve, 1600));
+    assert.equal(other.hasClass('search-hit'), false);
+    assert.equal(other.style('opacity'), '0.4');
+    renderer.hoverNode();
+    assert.equal(other.style('opacity'), '0.2');
+    assert.equal(edge(cy, 'b', 't').hasClass('path'), true);
+    assert.equal(edge(cy, 'root', 'a').hasClass('path'), false);
+    renderer.search.find('t');
+    renderer.clearDebugPath();
+    assert.equal(cy.$id('t').hasClass('search-hit'), true);
+    assert.equal(cy.$('.path, .current, .dimmed').length, 0);
+    renderer.search.clear();
+    assert.equal(cy.$('.search-hit').length, 0);
+  }],
+  ['replacement, failed searches, clearing, and disposal remove transient search state safely', (cy, renderer) => {
+    renderer.search.find('a');
+    renderer.search.find('missing');
+    assert.equal(cy.$('.search-hit').length, 0);
+    renderer.search.find('a');
+    renderer.search.clear();
+    assert.equal(cy.$('.search-hit').length, 0);
+    renderer.search.find('a');
+    renderer.renderGraph(fixture);
+    assert.equal(renderer.search.move(1).count, 0);
+    assert.equal(cy.$('.search-hit').length, 0);
+    renderer.search.find('a');
+    renderer.dispose();
+    assert.equal(cy.$('.search-hit').length, 0);
+    renderer.renderGraph({ nodes: [], edges: [] });
+    assert.equal(renderer.search.find('a').count, 0);
+  }],
   ['Trace disables dragging; Explore moves nodes and Trace restores exact positions and styling', (cy, renderer) => {
     assert.equal(renderer.layoutMode, 'trace');
     assert.equal(cy.autoungrabify(), true);
@@ -112,7 +272,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void][] = [
     assert.equal(cy.$id('t').style('label'), 't\nTarget');
     assert.ok(cy.$id('a').position('y') < cy.$id('b').position('y'));
     assert.equal(edge(cy, 'a', 't').hasClass('detour'), true);
-    assert.equal(edge(cy, 'a', 't').style('curve-style'), 'unbundled-bezier');
+    assert.equal(edge(cy, 'a', 't').style('curve-style'), 'bezier');
     assert.equal(renderer.layout!.distances.get('a'), 2);
     assert.deepEqual(renderer.layout!.annotations.map(annotation => annotation.label), ['No path to target']);
   }],
@@ -208,16 +368,19 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void][] = [
   }],
 ];
 
-let failed = 0;
-for (const [name, run] of cases) {
-  const cy = cytoscape({ headless: true, styleEnabled: true, style: graphStyles(), layout: { name: 'preset' } });
-  try {
+async function main(): Promise<void> {
+  let failed = 0;
+  for (const [name, run] of cases) {
+    const cy = cytoscape({ headless: true, styleEnabled: true, style: graphStyles(), layout: { name: 'preset' } });
     const renderer = new GraphRenderer(cy);
-    renderer.renderGraph(fixture);
-    run(cy, renderer);
-    console.log(`  PASS  ${name}`);
-  } catch (error) { failed++; console.error(`  FAIL  ${name}`, error); }
-  finally { cy.destroy(); advanceAnimationFrames(2); }
+    try {
+      renderer.renderGraph(fixture);
+      await run(cy, renderer);
+      console.log(`  PASS  ${name}`);
+    } catch (error) { failed++; console.error(`  FAIL  ${name}`, error); }
+    finally { renderer.dispose(); cy.destroy(); advanceAnimationFrames(2); }
+  }
+  console.log(`\n${cases.length - failed}/${cases.length} renderer tests passed`);
+  process.exitCode = failed ? 1 : 0;
 }
-console.log(`\n${cases.length - failed}/${cases.length} renderer tests passed`);
-process.exitCode = failed ? 1 : 0;
+void main();

@@ -98,3 +98,31 @@ export const mockDebugPath: DebugPath = [
   "function1.py::function1",
   "sum.py::sum"
 ];
+
+// A tall graph with duplicate names and the original mock runtime path intact.
+const searchNodes = Array.from({ length: 120 }, (_, index) => ({
+  id: `search/worker${index}.py::${index === 119 ? 'distantFunction' : 'worker' + index}`,
+  label: index === 119 ? 'distantFunction' : `worker${index}`,
+  file: `/pathfind-search/worker${index}.py`,
+  line: 1,
+  endLine: 10,
+}));
+
+export const largeSearchGraph: GraphData = {
+  targetIds: mockGraph.targetIds,
+  nodes: [
+    ...mockGraph.nodes,
+    ...searchNodes,
+    ...['one', 'two'].map(name => ({
+      id: `search/${name}/sum.py::sum`, label: 'sum',
+      file: `/pathfind-search/${name}/sum.py`, line: 20, endLine: 25,
+    })),
+  ],
+  edges: [
+    ...mockGraph.edges,
+    { from: 'main.py::main', to: searchNodes[0].id, lines: [] },
+    ...searchNodes.slice(1).map((node, index) => ({ from: searchNodes[index].id, to: node.id, lines: [] })),
+    { from: searchNodes[119].id, to: 'sum.py::sum', lines: [] },
+    ...['one', 'two'].map(name => ({ from: `search/${name}/sum.py::sum`, to: 'sum.py::sum', lines: [] })),
+  ],
+};

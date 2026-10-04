@@ -150,6 +150,13 @@ export class PathFindPanel implements vscode.Disposable {
   <header>
     <div><strong>PathFind</strong><span class="hint">Caller → callee · Longest paths to target · Hover to trace connections</span></div>
     <div class="graph-controls">
+      <form id="search-form" role="search" aria-label="Find a function in the graph">
+        <input id="search-input" type="search" placeholder="Find function" aria-label="Find function" aria-describedby="search-status" autocomplete="off" spellcheck="false">
+        <span id="search-count" hidden></span>
+        <button id="search-submit" type="submit" title="Search / next match (Enter)">Search</button>
+        <button id="search-previous" class="search-arrow" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)" disabled>&#8593;</button>
+        <button id="search-next" class="search-arrow" type="button" aria-label="Next match" title="Next match (Enter)" disabled>&#8595;</button>
+      </form>
       <select id="layout-mode" aria-label="Graph layout">
         <option value="trace">Trace</option>
         <option value="explore">Explore</option>
@@ -178,6 +185,7 @@ export class PathFindPanel implements vscode.Disposable {
     <!-- --- end legend feature --- -->
   </main>
   <footer>
+    <span id="search-status" role="status" aria-live="polite">Enter a function name</span>
     <!-- --- breadcrumb feature --- -->
     <nav id="breadcrumb" aria-label="Current call path" hidden></nav>
     <!-- --- end breadcrumb feature --- -->
