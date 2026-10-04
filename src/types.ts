@@ -43,6 +43,21 @@ export type CallerExpansionPreview =
 export type BreakpointCounts = Record<string, number>;
 // --- end breakpoint markers ---
 
+// --- session history ---
+/** One debugger pause of the recorded session. */
+export interface HistoryStep {
+  path: DebugPath;   // outer caller first, like debugPath (resolved against the graph at send time)
+  reason: string;    // DAP stopped reason: "breakpoint", "step", "exception", "pause", "entry", ...
+  time: number;      // ms since the session started
+  session: string;   // debug session name (child sessions are recorded into their parent's history)
+  where?: { name: string; file: string; line: number }; // the top frame
+}
+/** While recording only the count is sent; once the top-level session ends, every step. */
+export type SessionHistoryMessage =
+  | { type: 'sessionHistory'; state: 'recording'; count: number; dropped: number }
+  | { type: 'sessionHistory'; state: 'ended'; steps: HistoryStep[]; dropped: number }; // dropped: oldest steps over the cap
+// --- end session history ---
+
 export type GraphMessage =
   | { type: 'graph'; graph: GraphData }
   | { type: 'callerPreviews'; previews: Record<string, CallerExpansionPreview> }
@@ -50,7 +65,8 @@ export type GraphMessage =
   | { type: 'debugClear' }
   | { type: 'hotCounts'; counts: HotCounts } // hot-path counting
   | { type: 'callValues'; values: CallValues } // call values feature
-  | { type: 'breakpoints'; counts: BreakpointCounts }; // breakpoint markers
+  | { type: 'breakpoints'; counts: BreakpointCounts } // breakpoint markers
+  | SessionHistoryMessage; // session history
 
 export interface NodeClickedMessage {
   type: 'nodeClicked';

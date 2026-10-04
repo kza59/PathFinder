@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import cytoscape, { type Core } from 'cytoscape';
 import { advanceAnimationFrames, pendingAnimationFrames } from './animationFrames.test';
-import { GraphRenderer, graphStyles } from './graph';
+import { GraphRenderer, graphStyles, historyStepLabel } from './graph'; // historyStepLabel: session history
 import { heatColor, heatPalette, type HeatRange } from './heatmap';
 import type { GraphData, HotCounts } from '../src/types';
 import { largeSearchGraph } from '../src/test/mockdata';
@@ -973,6 +973,13 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(cy.$('.has-breakpoint').length, 0);
   }],
   // --- end breakpoint markers ---
+  // --- session history ---
+  ['session history step labels show position, location and reason', () => {
+    const step = { path: ['a'], reason: 'step', time: 0, session: 'Run', where: { name: 'sum', file: '/proj/sum.py', line: 2 } };
+    assert.equal(historyStepLabel(step, 6, 41), 'Step 7 of 41 · sum.py:2 sum (step)');
+    assert.equal(historyStepLabel({ ...step, where: undefined, reason: 'pause' }, 0, 1, 12), 'Step 1 of 1 · (no source) (pause) · 12 older dropped');
+  }],
+  // --- end session history ---
 ];
 
 async function main(): Promise<void> {
