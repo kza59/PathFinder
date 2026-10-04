@@ -19,10 +19,22 @@ function log(message: string) {
   }
 }
 
+/** Groups as sorted member lists, so the comparison doesn't depend on how groups are numbered. */
+function recursionGroups(members: (readonly [string, number | undefined])[]): string[][] {
+  const groups = new Map<number, string[]>();
+  for (const [id, group] of members) {
+    if (group !== undefined) {
+      groups.set(group, [...(groups.get(group) ?? []), id]);
+    }
+  }
+  return [...groups.values()].map(g => g.sort()).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
 function describe(graph: CallGraph | undefined) {
   return {
     nodes: (graph?.nodes.map(n => n.id) ?? []).sort(),
-    edges: (graph?.edges.map(e => `${e.from} -> ${e.to} @ ${e.lines.join(',')}`) ?? []).sort(),
+    edges: (graph?.edges.map(e => `${e.from} -> ${e.to} @ ${e.lines.join(',')}${e.recursive ? ' (recursive)' : ''}`) ?? []).sort(),
+    recursionGroups: recursionGroups(graph?.nodes.map(n => [n.id, n.recursionGroup] as const) ?? []),
   };
 }
 
@@ -39,7 +51,12 @@ async function runCase(root: string, c: Case): Promise<boolean> {
   };
   const expected = JSON.stringify({
     nodes: c.nodes.map(abs).sort(),
-    edges: c.edges.map(([f, t, lines]) => `${abs(f)} -> ${abs(t)} @ ${lines.join(',')}`).sort(),
+    edges: c.edges.map(([f, t, lines]) => {
+      // An edge is recursive exactly when both ends are in the same expected group.
+      const recursive = (c.recursionGroups ?? []).some(g => g.includes(f) && g.includes(t));
+      return `${abs(f)} -> ${abs(t)} @ ${lines.join(',')}${recursive ? ' (recursive)' : ''}`;
+    }).sort(),
+    recursionGroups: recursionGroups((c.recursionGroups ?? []).flatMap((g, i) => g.map(id => [abs(id), i] as const))),
   });
   let actual = '';
   const started = Date.now();
