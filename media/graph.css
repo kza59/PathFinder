@@ -30,6 +30,27 @@ header {
 header > div { min-width: 0; }
 header button { flex: none; }
 
+.graph-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+}
+
+#layout-mode {
+  padding: 5px;
+  border: 1px solid var(--vscode-dropdown-border, #454545);
+  border-radius: 3px;
+  color: var(--vscode-dropdown-foreground, #d4d4d4);
+  background: var(--vscode-dropdown-background, #252526);
+  font: inherit;
+}
+
+#layout-mode:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 2px;
+}
+
 #layout-labels {
   position: absolute;
   inset: 0;

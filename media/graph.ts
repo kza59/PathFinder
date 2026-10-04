@@ -1,9 +1,14 @@
-import cytoscape, { type Core, type ElementDefinition, type NodeSingular, type StylesheetJson } from 'cytoscape';
+import cytoscape, { type Core, type ElementDefinition, type Layouts, type NodeSingular, type StylesheetJson } from 'cytoscape';
+import cola from 'cytoscape-cola';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
 import type { DebugPath, GraphData, GraphMessage, GraphNode, WebviewMessage } from '../src/types';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
+
+cytoscape.use(cola);
+
+type LayoutMode = 'trace' | 'explore';
 
 export const layoutOptions = {
   name: 'preset' as const,
@@ -145,15 +150,82 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
 export class GraphRenderer {
   private path: DebugPath = [];
   private hoveredId: string | undefined;
+  private mode: LayoutMode = 'trace';
+  private exploreLayout?: Layouts;
+  private staticPositions = new Map<string, { x: number; y: number }>();
   public layout: TargetLayout | undefined;
 
   constructor(
     private readonly cy: Core,
     private readonly graphRendered: (nodeCount: number) => void = () => {},
     private readonly pathChanged: (current: GraphNode | undefined, active: boolean) => void = () => {},
-  ) {}
+  ) {
+    this.cy.autoungrabify(true);
+  }
+
+  public get layoutMode(): LayoutMode {
+    return this.mode;
+  }
+
+  public setLayoutMode(mode: LayoutMode): void {
+    if (this.mode === mode) return;
+    this.mode = mode;
+    this.applyLayoutMode();
+  }
+
+  private applyLayoutMode(): void {
+    this.stopExploreLayout();
+    this.cy.autoungrabify(this.mode === 'trace');
+
+    const nodes = this.cy.nodes();
+    nodes.unlock();
+
+    if (!nodes.length) return;
+
+    if (this.mode === 'explore') {
+      this.startExploreLayout();
+    } else {
+      this.cy.layout({
+        ...layoutOptions,
+        positions: Object.fromEntries(this.staticPositions),
+      }).run();
+
+      nodes
+        .filter(node => this.layout?.pinnedIds.has(node.id()) ?? false)
+        .lock();
+    }
+  }
+
+  private startExploreLayout(): void {
+    const options = {
+      name: 'cola',
+      animate: true,
+      refresh: 1,
+      randomize: false,
+      avoidOverlap: true,
+      nodeDimensionsIncludeLabels: true,
+      nodeSpacing: () => 30,
+      edgeLength: () => 100,
+      ungrabifyWhileSimulating: false,
+      fit: false,
+      centerGraph: false,
+      infinite: true,
+    };
+    this.exploreLayout = this.cy.layout(options);
+    this.exploreLayout.run();
+  }
+
+  private stopExploreLayout(): void {
+    this.exploreLayout?.stop();
+    this.exploreLayout = undefined;
+  }
+
+  public dispose(): void {
+    this.stopExploreLayout();
+  }
 
   public renderGraph(graph: GraphData): void {
+    this.stopExploreLayout();
     this.hoveredId = undefined;
     this.layout = targetLayout(graph);
     const layout = this.layout;
@@ -194,6 +266,9 @@ export class GraphRenderer {
         ...layoutOptions, positions: Object.fromEntries(layout.positions),
       }).run();
     }
+    // Copy coordinates before Explore can move them or the user can drag nodes.
+    this.staticPositions = new Map(this.cy.nodes().map(node => [node.id(), { ...node.position() }]));
+    if (this.mode === 'explore') this.applyLayoutMode();
     this.highlightPath(this.path);
     this.graphRendered(this.cy.nodes().length);
   }
@@ -285,6 +360,7 @@ export function initializeGraphWebview(): void {
   const layoutLabels = document.getElementById('layout-labels')!;
   const renderLayoutLabels = () => {
     layoutLabels.replaceChildren();
+    if (renderer.layoutMode === 'explore') return;
     const zoom = cy.zoom();
     const pan = cy.pan();
     for (const annotation of renderer.layout?.annotations ?? []) {
@@ -297,6 +373,11 @@ export function initializeGraphWebview(): void {
     }
   };
   cy.on('viewport resize', renderLayoutLabels);
+  const layoutMode = document.getElementById('layout-mode') as HTMLSelectElement;
+  layoutMode.addEventListener('change', () => {
+    renderer.setLayoutMode(layoutMode.value === 'explore' ? 'explore' : 'trace');
+    renderLayoutLabels();
+  });
 
   cy.on('tap', 'node', event => {
     const node = event.target.data() as GraphNode;
@@ -489,6 +570,7 @@ export function initializeGraphWebview(): void {
   // --- end breadcrumb feature ---
   window.addEventListener('unload', () => {
     observer.disconnect();
+    renderer.dispose();
     cy.destroy();
   });
   vscode.postMessage({ type: 'ready' });

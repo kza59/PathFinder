@@ -130,7 +130,13 @@ export class PathFindPanel implements vscode.Disposable {
 <body>
   <header>
     <div><strong>PathFind</strong><span class="hint">Caller → callee · Longest paths to target · Hover to trace connections</span></div>
-    <button id="fit" type="button">Fit graph</button>
+    <div class="graph-controls">
+      <select id="layout-mode" aria-label="Graph layout">
+        <option value="trace">Trace</option>
+        <option value="explore">Explore</option>
+      </select>
+      <button id="fit" type="button">Fit graph</button>
+    </div>
   </header>
   <main>
     <div id="graph" role="img" aria-label="Directed function call graph"></div>

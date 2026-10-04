@@ -45,13 +45,13 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./ && tsc -p tsconfig.webview.json && npm run build:webview",
-    "watch": "tsc -watch -p ./",
+    "compile": "tsc -p tsconfig.extension.json && tsc -p tsconfig.webview.json && npm run build:webview",
+    "watch": "tsc -watch -p tsconfig.extension.json",
     "build:webview": "esbuild media/graph.ts --bundle --platform=browser --outfile=out/webview/graph.js",
     "watch:webview": "npm run build:webview -- --watch",
     "vscode:prepublish": "npm run compile",
-    "test": "tsc -p ./ && node out/test/runTest.js",
-    "test:unit": "tsc -p ./ && node out/test/recursion.unit.js && node out/test/chokepoints.unit.js && node out/test/targetLayout.unit.js && npm run test:renderer",
+    "test": "tsc -p tsconfig.extension.json && node out/test/runTest.js",
+    "test:unit": "tsc -p tsconfig.extension.json && node out/test/recursion.unit.js && node out/test/targetLayout.unit.js && npm run test:renderer",
     "test:renderer": "tsc -p tsconfig.webview.json && esbuild media/graph.test.ts --bundle --platform=node --outfile=out/test/graphRenderer.unit.js && node out/test/graphRenderer.unit.js"
   },
   "devDependencies": {
@@ -62,6 +62,7 @@
     "typescript": "^5.4.0"
   },
   "dependencies": {
-    "cytoscape": "^3.34.3"
+    "cytoscape": "^3.34.3",
+    "cytoscape-cola": "^2.5.1"
   }
 }

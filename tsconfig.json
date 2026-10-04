@@ -3,11 +3,15 @@
     "module": "commonjs",
     "target": "ES2022",
     "lib": ["ES2022"],
+    "types": ["node", "vscode"],
     "outDir": "out",
     "rootDir": "src",
     "sourceMap": true,
     "strict": true
   },
-  "include": ["src"]
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.extension.json" },
+    { "path": "./tsconfig.webview.json" }
+  ]
 }
- 
