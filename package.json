@@ -1,5 +1,5 @@
 {
-  "name": "pathfinder",
+  "name": "pathfinder-stormhacks",
   "displayName": "PathFinder",
   "description": "Right-click a function to see every call path that leads to it.",
   "publisher": "pathfinder-team-stormhacks",
