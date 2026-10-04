@@ -192,6 +192,9 @@ export class PathFindPanel implements vscode.Disposable {
     <!-- --- copy path feature --- enabled by media/graph.ts while the breadcrumb shows a path -->
     <button id="copy-path" type="button" title="Copy the current call path as text" disabled>Copy path</button>
     <!-- --- end copy path feature --- -->
+    <!-- --- replay feature --- enabled by media/graph.ts while the breadcrumb shows a path -->
+    <button id="replay-path" type="button" title="Replay the call path, outer caller to current function" disabled>Replay</button>
+    <!-- --- end replay feature --- -->
     <span id="runtime" role="status" aria-live="polite">No runtime path</span>
     <span id="selection">Click a function to see its source location</span>
   </footer>

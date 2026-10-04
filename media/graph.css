@@ -277,3 +277,11 @@ footer {
   background: var(--vscode-button-background, #0e639c);
 }
 /* --- end copy path feature --- */
+
+/* --- replay feature --- */
+#replay-path:disabled {
+  opacity: 0.5;
+  cursor: default;
+  background: var(--vscode-button-background, #0e639c);
+}
+/* --- end replay feature --- */
