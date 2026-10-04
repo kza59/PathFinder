@@ -4,7 +4,7 @@
   "description": "Right-click a function to see every call path that leads to it.",
   "publisher": "pathfinder-team-stormhacks",
   "repository": "https://github.com/kza59/PathFinder",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
