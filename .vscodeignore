@@ -1,0 +1,41 @@
+# Files left out of the .vsix. Everything not listed here ships.
+# Runtime needs: out/** (compiled extension + webview bundle), python/**, gdb/**, media/*.css,
+# package.json, README.md, LICENSE.
+
+# Private local settings (Claude Code) - must never ship
+.claude/**
+
+# Editor / VCS / tooling
+.vscode/**
+.vscode-test/**
+.git/**
+.gitignore
+**/*.vsix
+tsconfig*.json
+
+# Sources (the compiled output in out/ is what runs)
+src/**
+media/**/*.ts
+
+# Tests and test fixtures
+**/*.test.ts
+**/*.unit.ts
+test1/**
+test2/**
+test3/**
+test4/**
+test5/**
+test6/**
+test7/**
+test8/**
+# Compiled tests, except the two modules extension.js loads at startup
+# (graphRendererTest registers the "PathFind: Test ..." commands and imports mockdata).
+out/test/**
+!out/test/graphRendererTest.js
+!out/test/mockdata.js
+
+# Not needed at runtime
+node_modules/**
+**/*.map
+**/__pycache__/**
+example*.png

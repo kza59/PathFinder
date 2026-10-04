@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { expandCallers } from '../graphBuilder';
-import type { CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage } from '../types';
+import type { BreakpointCounts, CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage } from '../types';
 import { callerExpansionPreview } from './callerPreview';
 
 export class PathFindPanel implements vscode.Disposable {
@@ -19,6 +19,7 @@ export class PathFindPanel implements vscode.Disposable {
   private hotCounts: HotCounts = {};
   // --- end hot-path counting ---
   private callValues: CallValues = {}; // call values feature
+  private breakpoints: BreakpointCounts = {}; // breakpoint markers
   private ready = false;
   private disposed = false;
   private expanding = false;
@@ -76,6 +77,11 @@ export class PathFindPanel implements vscode.Disposable {
             this.send({ type: 'callValues', values: this.callValues });
           }
           // --- end call values feature ---
+          // --- breakpoint markers ---
+          if (Object.keys(this.breakpoints).length) {
+            this.send({ type: 'breakpoints', counts: this.breakpoints });
+          }
+          // --- end breakpoint markers ---
         } else if (
           message.type === 'nodeClicked' &&
           'id' in message && typeof message.id === 'string' &&
@@ -201,6 +207,13 @@ export class PathFindPanel implements vscode.Disposable {
   }
   // --- end call values feature ---
 
+  // --- breakpoint markers ---
+  public setBreakpoints(counts: BreakpointCounts): void {
+    this.breakpoints = { ...counts };
+    this.send({ type: 'breakpoints', counts: this.breakpoints });
+  }
+  // --- end breakpoint markers ---
+
   public get currentGraph(): GraphData | undefined {
     return this.graph;
   }
@@ -252,7 +265,8 @@ export class PathFindPanel implements vscode.Disposable {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src ${webview.cspSource} 'unsafe-inline';">
+  <!-- breakpoint markers: img-src data: lets Cytoscape draw the breakpoint dot (an inline SVG background image) -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src ${webview.cspSource} 'unsafe-inline'; img-src data:;">
   <link rel="stylesheet" href="${css}">
   <title>PathFind</title>
 </head>
@@ -292,6 +306,9 @@ export class PathFindPanel implements vscode.Disposable {
         <li><span class="swatch node path" aria-hidden="true"></span>On current call path</li>
         <li><span class="swatch node current" aria-hidden="true"></span>You are here</li>
         <li><span class="swatch node dimmed" aria-hidden="true"></span>Not on current path</li>
+        <!-- --- breakpoint markers --- -->
+        <li><span class="swatch node breakpoint" aria-hidden="true"></span>Has a breakpoint</li>
+        <!-- --- end breakpoint markers --- -->
         <li><span class="swatch edge" aria-hidden="true"></span>Calls (caller → callee)</li>
         <li id="recursion-group-legend" hidden><span class="swatch recursion-group" aria-hidden="true"></span>Shared outline: recursion group</li>
         <li id="recursive-edge-legend" hidden><span class="swatch edge recursive" aria-hidden="true"></span>Recursive call (dashed)</li>

@@ -38,13 +38,19 @@ export type CallerExpansionPreview =
   | { state: 'ready'; addedNodes: number; addedNoiseNodes: number }
   | { state: 'error' };
 
+// --- breakpoint markers ---
+/** Enabled breakpoints per graph node id (only nodes in the current graph that have at least one). */
+export type BreakpointCounts = Record<string, number>;
+// --- end breakpoint markers ---
+
 export type GraphMessage =
   | { type: 'graph'; graph: GraphData }
   | { type: 'callerPreviews'; previews: Record<string, CallerExpansionPreview> }
   | { type: 'debugPath'; path: DebugPath }
   | { type: 'debugClear' }
   | { type: 'hotCounts'; counts: HotCounts } // hot-path counting
-  | { type: 'callValues'; values: CallValues }; // call values feature
+  | { type: 'callValues'; values: CallValues } // call values feature
+  | { type: 'breakpoints'; counts: BreakpointCounts }; // breakpoint markers
 
 export interface NodeClickedMessage {
   type: 'nodeClicked';
