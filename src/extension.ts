@@ -4,6 +4,7 @@ import { registerGraphRendererTestCommands } from './test/graphRendererTest';
 import { PathFindPanel } from './webview/PathFindPanel';
 import { registerDebugTracker } from './debugTracker';
 import { registerHotPathCounting } from './hotPath'; // hot-path counting
+import { registerGdbHotPathCounting } from './hotPathGdb'; // hot-path counting for C/C++
 import { registerRecursionLog } from './recursionLog';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -12,6 +13,7 @@ export function activate(context: vscode.ExtensionContext) {
   registerDebugTracker(context);
   // --- hot-path counting ---
   registerHotPathCounting(context);
+  registerGdbHotPathCounting(context);
   // --- end hot-path counting ---
   // registerRecursionLog(context); // TEMPORARY: see src/recursionLog.ts
 
