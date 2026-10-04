@@ -61,6 +61,21 @@ to its static view while retaining the final heatmap counts and the current
 layout and viewport. Ending an unrelated debug session preserves the displayed
 session's path.
 
+Recursive functions have matching colored outlines and a shared enclosure for each
+group. Calls within a recursive group are dashed, including self calls. Recursion
+legend entries appear only when those structures are visible. During debugging or
+path replay, a recursion banner appears only when the stack repeats a function in
+a recursive group; its tooltip shows the group and depth. Depth counts repeated
+frames after each function's first appearance: three calls to the same function
+produce depth 2 and **DOUBLE RECURSION!**.
+
+To try this, open `test5/python` or `test5/c`, run **PathFind** on `leaf` in
+`recursion.py` or `recursion.c`, then place a breakpoint on `return value` and run
+**Debug main**. The three stops exercise direct recursion (`countdown`), mutual
+recursion (`is_even` / `is_odd`), and a three-function cycle (`step_a` / `step_b` /
+`step_c`). Static recursion outlines remain when the runtime path clears; the
+banner disappears.
+
 Chokepoints have a small ◇ beside their function name. **Where to break** focuses
 a chokepoint at a readable zoom, starting closest to the target. Use the search
 bar's result counter and previous/next arrows (or Enter / Shift+Enter in the

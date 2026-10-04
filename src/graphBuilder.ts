@@ -23,7 +23,7 @@ export interface GraphEdge {
   from: string;     // caller id
   to: string;       // callee id
   lines: number[];  // 1-based lines in the caller's file where it calls the callee, ascending (one per call site)
-  recursive?: true; // set when both ends share a recursionGroup, i.e. this call is part of a cycle
+  recursive?: boolean; // true when both ends share a recursionGroup; omitted for calls outside a cycle
 }
 
 export interface CallGraph {

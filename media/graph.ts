@@ -2,6 +2,8 @@ import cytoscape, { type Core, type ElementDefinition, type Layouts, type NodeSi
 import cola from 'cytoscape-cola';
 import { GraphSearch, type SearchState } from './graphSearch';
 import { heatColor, heatPalette, heatPosition, type HeatRange } from './heatmap';
+import { recursionAnnouncement, recursionColor, recursionOutlines } from './recursion';
+import { recursionDepth, type RecursionDepth } from '../src/recursion';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
 import type { CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, WebviewMessage } from '../src/types';
@@ -67,6 +69,13 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
       },
     },
     {
+      selector: 'node.recursion-member',
+      style: {
+        'outline-color': (node: NodeSingular) => recursionColor(node.data('recursionGroup')),
+        'outline-width': 2, 'outline-offset': 5,
+      },
+    },
+    {
       selector: 'edge',
       style: {
         width: 2,
@@ -102,6 +111,10 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
         'line-color': '#8196aa',
         'target-arrow-color': '#8196aa',
       },
+    },
+    {
+      selector: 'edge.recursive',
+      style: { 'line-style': 'dashed', width: 2, opacity: 1 },
     },
     {
       selector: '.dimmed',
@@ -175,6 +188,8 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
 
 export class GraphRenderer {
   private path: DebugPath = [];
+  private graph: GraphData = { nodes: [], edges: [] };
+  public recursionLevels: RecursionDepth[] = [];
   private hotCounts = new Map<string, number>();
   public heatRange: HeatRange | undefined;
   private hoveredId: string | undefined;
@@ -216,6 +231,7 @@ export class GraphRenderer {
     searchChanged: (state: SearchState) => void = () => {},
     private readonly heatChanged: (range: HeatRange | undefined) => void = () => {},
     private readonly visibilityChanged: (nodeCount: number) => void = () => {},
+    private readonly recursionChanged: (levels: RecursionDepth[]) => void = () => {},
   ) {
     this.cy.autoungrabify(true);
     this.search = new GraphSearch(cy, searchChanged);
@@ -313,6 +329,7 @@ export class GraphRenderer {
   }
 
   public renderGraph(graph: GraphData): void {
+    this.graph = graph;
     this.search.clear();
     this.stopExploreLayout();
     this.hoveredId = undefined;
@@ -322,7 +339,8 @@ export class GraphRenderer {
     const elements: ElementDefinition[] = graph.nodes.map(node => ({
       group: 'nodes',
       data: { ...node, distance: layout.distances.get(node.id) },
-      classes: [layout.targetIds.has(node.id) ? 'target' : '', node.chokepoint === true ? 'chokepoint' : '']
+      classes: [layout.targetIds.has(node.id) ? 'target' : '', node.chokepoint === true ? 'chokepoint' : '',
+        node.recursionGroup !== undefined ? 'recursion-member' : '']
         .filter(Boolean).join(' '),
       position: layout.positions.get(node.id),
       locked: layout.pinnedIds.has(node.id),
@@ -343,7 +361,8 @@ export class GraphRenderer {
           controlDistances: route.controlDistances,
           controlWeights: route.controlWeights ?? [0.5],
         },
-        classes: route.kind === 'normal' ? '' : route.kind,
+        classes: [route.kind === 'normal' ? '' : route.kind, edge.recursive === true ? 'recursive' : '']
+          .filter(Boolean).join(' '),
       });
     });
 
@@ -402,6 +421,7 @@ export class GraphRenderer {
 
   public highlightPath(path: DebugPath): void {
     this.path = [...path];
+    this.recursionLevels = recursionDepth(this.path, this.graph);
     const pathIds = new Set(path);
     const pathNodes = this.cy.nodes().filter(node => pathIds.has(node.id()));
     const pathEdges = new Set(path.slice(1).map((id, index) => JSON.stringify([path[index], id])));
@@ -426,6 +446,7 @@ export class GraphRenderer {
 
     const current = path.length ? this.cy.getElementById(path[path.length - 1]) : undefined;
     this.pathChanged(current?.isNode() ? current.data() as GraphNode : undefined, path.length > 0);
+    this.recursionChanged(this.recursionLevels);
   }
 
   public clearDebugPath(): void {
@@ -477,6 +498,7 @@ export function initializeGraphWebview(): void {
   const heatLow = document.getElementById('heat-low')!;
   const heatHigh = document.getElementById('heat-high')!;
   const heatNote = document.getElementById('heat-note')!;
+  const recursionBanner = document.getElementById('recursion-banner')!;
   let tooltipNodeId: string | undefined;
   let tooltipPosition: { x: number; y: number } | undefined;
   const cy = cytoscape({
@@ -545,7 +567,54 @@ export function initializeGraphWebview(): void {
         : 'Linear scale for this graph; colors rescale as counts change.';
     }
     if (tooltipNodeId !== undefined) refreshTooltipCount();
-  }, count => { updateEmpty(count); updateChokepoints(); });
+  }, count => { updateEmpty(count); updateChokepoints(); }, levels => {
+    recursionBanner.hidden = levels.length === 0;
+    recursionBanner.textContent = recursionAnnouncement(levels);
+    recursionBanner.title = levels.map(level => {
+      const names = level.members.map(id => cy.getElementById(id).data('label') as string);
+      return `Group ${level.group}: ${names.join(' / ')}; depth ${level.depth}`;
+    }).join('\n');
+  });
+
+  // Enclosures use an SVG overlay so they do not add synthetic nodes to layout, search or paths.
+  const outlineHost = document.getElementById('recursion-outlines')!;
+  const outlineSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  outlineHost.appendChild(outlineSvg);
+  const recursionGroupLegend = document.getElementById('recursion-group-legend')!;
+  const recursiveEdgeLegend = document.getElementById('recursive-edge-legend')!;
+  let outlineFrame: number | undefined;
+  const renderRecursionOutlines = () => {
+    outlineFrame = undefined;
+    const groups = recursionOutlines(cy);
+    outlineHost.hidden = recursionGroupLegend.hidden = groups.length === 0;
+    recursiveEdgeLegend.hidden = cy.edges('.recursive:visible').length === 0;
+    const zoom = cy.zoom();
+    const pan = cy.pan();
+    outlineSvg.replaceChildren();
+    for (const group of groups) {
+      const rect = document.createElementNS(outlineSvg.namespaceURI, 'rect');
+      rect.setAttribute('x', String(group.x * zoom + pan.x));
+      rect.setAttribute('y', String(group.y * zoom + pan.y));
+      rect.setAttribute('width', String(group.width * zoom));
+      rect.setAttribute('height', String(group.height * zoom));
+      rect.setAttribute('rx', String(12 * zoom));
+      rect.setAttribute('stroke', group.color);
+      rect.setAttribute('data-recursion-group', String(group.group));
+      outlineSvg.appendChild(rect);
+      if (zoom < 0.25) continue;
+      const label = document.createElementNS(outlineSvg.namespaceURI, 'text');
+      label.setAttribute('x', String((group.x + 8) * zoom + pan.x));
+      label.setAttribute('y', String((group.y - 5) * zoom + pan.y));
+      label.setAttribute('fill', group.color);
+      label.setAttribute('font-size', String(Math.max(9, Math.min(13, 12 * zoom))));
+      label.textContent = `Recursion ${group.group}`;
+      outlineSvg.appendChild(label);
+    }
+  };
+  const scheduleRecursionOutlines = () => {
+    outlineFrame ??= requestAnimationFrame(renderRecursionOutlines);
+  };
+  cy.on('viewport resize position add remove style', scheduleRecursionOutlines);
 
   whereToBreak.addEventListener('click', () => {
     searchInput.value = '';
@@ -614,6 +683,7 @@ export function initializeGraphWebview(): void {
   const tooltipConnections = tooltip.appendChild(document.createElement('div'));
   const tooltipDistance = tooltip.appendChild(document.createElement('div'));
   const tooltipChokepoint = tooltip.appendChild(document.createElement('div'));
+  const tooltipRecursion = tooltip.appendChild(document.createElement('div'));
   const tooltipCalls = tooltip.appendChild(document.createElement('div'));
   // --- call values feature ---
   const tooltipArgs = tooltip.appendChild(document.createElement('div'));
@@ -692,6 +762,8 @@ export function initializeGraphWebview(): void {
     refreshTooltipCount();
     renderer.hoverNode(node.id);
     tooltipName.textContent = node.label;
+    tooltipRecursion.hidden = node.recursionGroup === undefined;
+    tooltipRecursion.textContent = `Recursion group ${node.recursionGroup}`;
     tooltipChokepoint.hidden = node.chokepoint !== true;
     tooltipChokepoint.textContent = 'Chokepoint: every analyzed path to the target passes through this function.';
     tooltipFile.textContent = fileName(node.file);
@@ -912,6 +984,8 @@ export function initializeGraphWebview(): void {
   // --- end replay feature ---
   window.addEventListener('unload', () => {
     stopReplay(); // replay feature
+    if (outlineFrame !== undefined) cancelAnimationFrame(outlineFrame);
+    cy.off('viewport resize position add remove style', scheduleRecursionOutlines);
     observer.disconnect();
     renderer.dispose();
     cy.destroy();

@@ -65,6 +65,22 @@ const cases: [string, () => void][] = [
     assert.ok(!('recursionGroup' in g.nodes.find(n => n.id === 'main')!));
     assert.ok(!('recursive' in g.edges.find(e => e.from === 'main')!));
   }],
+  ['recomputing after breaking a cycle removes stale fields and retains other metadata', () => {
+    const g = markRecursion(graph('main->a', 'a->b', 'b->a'));
+    g.targetIds = ['a'];
+    g.nodes.find(n => n.id === 'a')!.noise = true;
+    g.edges = g.edges.filter(e => e.from !== 'b');
+    assert.strictEqual(markRecursion(g), g);
+    assert.ok(g.nodes.every(n => !('recursionGroup' in n)));
+    assert.ok(g.edges.every(e => !('recursive' in e)));
+    assert.strictEqual(g.nodes.find(n => n.id === 'a')!.noise, true);
+    assert.deepStrictEqual(g.targetIds, ['a']);
+  }],
+  ['edges to missing nodes cannot create a recursion group', () => {
+    const g = graph('a->missing', 'missing->a');
+    g.nodes = g.nodes.filter(n => n.id !== 'missing');
+    assert.deepStrictEqual(summary(markRecursion(g)), { groups: [], recursiveEdges: [] });
+  }],
   ['a 20,000-function loop does not overflow the stack', () => {
     const n = 20_000;
     const edges = Array.from({ length: n }, (_, i) => `f${i}->f${(i + 1) % n}`);

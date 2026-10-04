@@ -179,6 +179,23 @@ main {
   inset: 0;
 }
 
+#recursion-outlines {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+#recursion-outlines svg { width: 100%; height: 100%; }
+#recursion-outlines rect { fill: none; stroke-width: 1.5; opacity: 0.7; }
+#recursion-outlines text { font-weight: bold; }
+#recursion-outlines[hidden], #recursion-banner[hidden] { display: none; }
+
+#recursion-banner {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  font-weight: bold;
+}
+
 #empty {
   position: absolute;
   inset: 40% 14px auto;
@@ -313,6 +330,15 @@ footer {
   height: auto;
   text-align: center;
   font-size: 14px;
+}
+
+#legend li[hidden] { display: none; }
+#legend .swatch.recursion-group {
+  border: 2px solid #c586c0;
+  border-radius: 5px;
+}
+#legend .swatch.edge.recursive {
+  background: repeating-linear-gradient(to right, var(--pf-edge) 0 5px, transparent 5px 8px);
 }
 
 #legend .swatch.node.current {

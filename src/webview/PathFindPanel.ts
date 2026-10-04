@@ -189,6 +189,7 @@ export class PathFindPanel implements vscode.Disposable {
   </header>
   <main>
     <div id="graph" role="img" aria-label="Directed function call graph"></div>
+    <div id="recursion-outlines" aria-hidden="true" hidden></div>
     <div id="layout-labels" aria-hidden="true"></div>
     <p id="empty">Waiting for graph data…</p>
     <!-- --- legend feature --- swatch colors are filled in from graphStyles() by media/graph.ts -->
@@ -202,6 +203,8 @@ export class PathFindPanel implements vscode.Disposable {
         <li><span class="swatch node current" aria-hidden="true"></span>You are here</li>
         <li><span class="swatch node dimmed" aria-hidden="true"></span>Not on current path</li>
         <li><span class="swatch edge" aria-hidden="true"></span>Calls (caller → callee)</li>
+        <li id="recursion-group-legend" hidden><span class="swatch recursion-group" aria-hidden="true"></span>Shared outline: recursion group</li>
+        <li id="recursive-edge-legend" hidden><span class="swatch edge recursive" aria-hidden="true"></span>Recursive call (dashed)</li>
         <li><span class="swatch edge incoming" aria-hidden="true"></span>Calls hovered function</li>
         <li><span class="swatch edge outgoing" aria-hidden="true"></span>Called by hovered function</li>
       </ul>
@@ -229,6 +232,7 @@ export class PathFindPanel implements vscode.Disposable {
     <button id="replay-path" type="button" title="Replay the call path, outer caller to current function" disabled>Replay</button>
     <!-- --- end replay feature --- -->
     <span id="runtime" role="status" aria-live="polite">No runtime path</span>
+    <span id="recursion-banner" role="status" aria-live="polite" hidden></span>
     <span id="selection">Click a function to see its source location</span>
   </footer>
   <script nonce="${nonce}" src="${script}"></script>

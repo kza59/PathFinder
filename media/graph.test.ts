@@ -6,6 +6,9 @@ import { heatColor, heatPalette, type HeatRange } from './heatmap';
 import type { GraphData, HotCounts } from '../src/types';
 import { largeSearchGraph } from '../src/test/mockdata';
 import { CASES } from '../src/test/cases';
+import { DEBUG_CASES } from '../src/test/debugCases';
+import { markRecursion } from '../src/recursion';
+import { recursionAnnouncement, recursionColor, recursionOutlines } from './recursion';
 
 const fixture: GraphData = {
   targetIds: ['t'],
@@ -21,6 +24,105 @@ const noiseFixture: GraphData = {
 };
 
 const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void>][] = [
+  ...['test5/python', 'test5/c'].map(fixtureName => [
+    `${fixtureName}: direct, mutual and three-function recursion display and live depth`,
+    (cy: Core, renderer: GraphRenderer) => {
+      const expected = CASES[fixtureName].find(c => c.name.includes('all three shapes'))!;
+      const graph = markRecursion({
+        targetIds: [expected.nodes[0]],
+        nodes: expected.nodes.map(id => ({ id, label: id.split('::')[1], file: id.split('::')[0], line: 1, endLine: 2 })),
+        edges: expected.edges.map(([from, to, lines]) => ({ from, to, lines })),
+      });
+      renderer.renderGraph(graph);
+      assert.deepEqual(recursionOutlines(cy).map(outline => outline.members.sort()).sort(),
+        expected.recursionGroups!.map(group => [...group].sort()).sort());
+      assert.equal(cy.nodes().length, graph.nodes.length);
+      assert.equal(cy.edges().length, graph.edges.length);
+      for (const node of graph.nodes) {
+        assert.equal(cy.$id(node.id).hasClass('recursion-member'), node.recursionGroup !== undefined);
+        assert.equal(cy.$id(node.id).style('outline-width'), node.recursionGroup === undefined ? '0px' : '2px');
+      }
+      for (const item of graph.edges) {
+        const rendered = edge(cy, item.from, item.to);
+        assert.equal(rendered.hasClass('recursive'), item.recursive === true);
+        if (item.recursive) assert.equal(rendered.style('line-style'), 'dashed');
+      }
+      for (const [index, path] of DEBUG_CASES[fixtureName][0].stops.entries()) {
+        renderer.highlightPath(path);
+        assert.equal(renderer.recursionLevels.length, 1);
+        assert.equal(renderer.recursionLevels[0].depth, [3, 3, 6][index]);
+        assert.equal(recursionAnnouncement(renderer.recursionLevels), ['TRIPLE RECURSION!', 'TRIPLE RECURSION!', 'ULTRA RECURSION!'][index]);
+        const recursiveCalls = cy.edges('.recursive.path');
+        assert.ok(recursiveCalls.length > 0);
+        recursiveCalls.forEach(call => {
+          assert.equal(call.style('line-style'), 'dashed');
+          assert.equal(call.style('line-color'), 'rgb(79,193,255)');
+        });
+        renderer.hoverNode(path[1]);
+        recursiveCalls.forEach(call => assert.equal(call.style('line-style'), 'dashed'));
+        renderer.hoverNode();
+      }
+      renderer.clearDebugPath();
+      assert.deepEqual(renderer.recursionLevels, []);
+      assert.equal(recursionAnnouncement(renderer.recursionLevels), '');
+      assert.equal(recursionOutlines(cy).length, 3);
+      renderer.renderGraph(fixture);
+      assert.equal(recursionOutlines(cy).length, 0);
+      assert.equal(cy.$('.recursion-member, .recursive').length, 0);
+    },
+  ] as [string, (cy: Core, renderer: GraphRenderer) => void]),
+  ['recursion enclosures follow node positions and noise visibility without adding graph elements', (cy, renderer) => {
+    renderer.renderGraph(markRecursion({
+      ...noiseFixture, nodes: noiseFixture.nodes.map(node => ({ ...node })),
+      edges: noiseFixture.edges.map(item => ({ ...item })),
+    }));
+    const first = recursionOutlines(cy);
+    assert.equal(first.length, 2);
+    const mutual = first.find(outline => outline.members.includes('b'))!;
+    assert.deepEqual(mutual.members, ['b']);
+    renderer.setShowNoise(true);
+    const visible = recursionOutlines(cy).find(outline => outline.group === mutual.group)!;
+    assert.deepEqual(visible.members.sort(), ['a', 'b']);
+    cy.$id('b').unlock().position({ x: 2000, y: 2000 });
+    const moved = recursionOutlines(cy).find(outline => outline.group === mutual.group)!;
+    assert.ok(moved.width > visible.width);
+    assert.ok(moved.height > visible.height);
+    for (const id of ['a', 'b']) {
+      const pos = cy.$id(id).position();
+      assert.ok(pos.x > moved.x && pos.x < moved.x + moved.width);
+      assert.ok(pos.y > moved.y && pos.y < moved.y + moved.height);
+      assert.equal(cy.$id(id).style('outline-color'), cy.$id('a').style('outline-color'));
+    }
+    renderer.setShowNoise(false);
+    assert.deepEqual(recursionOutlines(cy).find(outline => outline.group === mutual.group)!.members, ['b']);
+    assert.equal(cy.nodes().length, noiseFixture.nodes.length);
+    assert.notEqual(recursionColor(1), recursionColor(2));
+  }],
+  ['banner updates only for repeated recursive frames and recomputes on graph replacement', (cy) => {
+    const announcements: string[] = [];
+    const renderer = new GraphRenderer(cy, undefined, undefined, undefined, undefined, undefined,
+      levels => announcements.push(recursionAnnouncement(levels)));
+    try {
+      const graph = markRecursion({
+        ...fixture, nodes: fixture.nodes.map(node => ({ ...node })),
+        edges: fixture.edges.map(item => ({ ...item })),
+      });
+      renderer.highlightPath(['root', 'a', 't', 't', 't']);
+      assert.equal(announcements.at(-1), '');
+      renderer.renderGraph(graph);
+      assert.equal(announcements.at(-1), 'DOUBLE RECURSION!');
+      renderer.highlightPath(['t']); assert.equal(announcements.at(-1), '');
+      renderer.highlightPath(['root', 'root']); assert.equal(announcements.at(-1), '');
+      renderer.highlightPath(Array(11).fill('t')); assert.equal(announcements.at(-1), 'MONSTER RECURSION!');
+      renderer.highlightPath(['t', 'outside', 't']); assert.equal(announcements.at(-1), 'RECURSION!');
+      renderer.renderGraph(fixture); assert.equal(announcements.at(-1), '');
+      renderer.clearDebugPath(); assert.equal(announcements.at(-1), '');
+    } finally { renderer.dispose(); }
+  }],
+  ['recursive false leaves the edge without recursion styling', (cy, renderer) => {
+    renderer.renderGraph({ ...fixture, edges: fixture.edges.map(item => ({ ...item, recursive: false })) });
+    assert.equal(cy.edges('.recursive').length, 0);
+  }],
   ['chokepoint markers require true and compose with target, debug, heat and argument styles', (cy, renderer) => {
     const graph: GraphData = {
       ...fixture,

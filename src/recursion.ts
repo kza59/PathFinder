@@ -12,10 +12,10 @@ import type { CallGraph } from './graphBuilder';
  */
 export function markRecursion(graph: CallGraph): CallGraph {
   const groupOf = new Map<string, number>();
+  const selfCalls = new Set(graph.edges.filter(e => e.from === e.to).map(e => e.from));
   let nextGroup = 1;
   for (const component of stronglyConnectedComponents(graph)) {
-    const callsItself = component.length === 1
-      && graph.edges.some(e => e.from === component[0] && e.to === component[0]);
+    const callsItself = component.length === 1 && selfCalls.has(component[0]);
     if (component.length > 1 || callsItself) {
       const group = nextGroup++;
       component.forEach(id => groupOf.set(id, group));
@@ -23,12 +23,14 @@ export function markRecursion(graph: CallGraph): CallGraph {
   }
 
   for (const node of graph.nodes) {
+    delete node.recursionGroup;
     const group = groupOf.get(node.id);
     if (group !== undefined) {
       node.recursionGroup = group;
     }
   }
   for (const edge of graph.edges) {
+    delete edge.recursive;
     const group = groupOf.get(edge.from);
     if (group !== undefined && group === groupOf.get(edge.to)) {
       edge.recursive = true;
@@ -59,17 +61,18 @@ export function recursionDepth(path: string[], graph: CallGraph): RecursionDepth
     }
   }
 
-  const byGroup = new Map<number, { reentries: number; members: string[] }>();
+  const byGroup = new Map<number, { reentries: number; members: string[]; seen: Set<string> }>();
   for (const id of path) {
     const group = groupOf.get(id);
     if (group === undefined) {
       continue;
     }
-    const entry = byGroup.get(group) ?? { reentries: 0, members: [] };
-    if (entry.members.includes(id)) {
+    const entry = byGroup.get(group) ?? { reentries: 0, members: [], seen: new Set<string>() };
+    if (entry.seen.has(id)) {
       entry.reentries++; // this function was already running further up the stack
     } else {
       entry.members.push(id);
+      entry.seen.add(id);
     }
     byGroup.set(group, entry);
   }
@@ -86,7 +89,7 @@ export function recursionDepth(path: string[], graph: CallGraph): RecursionDepth
 export function stronglyConnectedComponents(graph: CallGraph): string[][] {
   const callees = new Map<string, string[]>(graph.nodes.map(n => [n.id, []]));
   for (const edge of graph.edges) {
-    callees.get(edge.from)?.push(edge.to);
+    if (callees.has(edge.to)) callees.get(edge.from)?.push(edge.to);
   }
 
   const index = new Map<string, number>();
@@ -144,8 +147,7 @@ export function stronglyConnectedComponents(graph: CallGraph): string[][] {
 
   // Tarjan emits components in reverse topological order; reorder by first appearance for stable numbering.
   const position = new Map(graph.nodes.map((n, i) => [n.id, i]));
-  const first = (component: string[]) => Math.min(...component.map(id => position.get(id)!));
   return components
     .map(component => component.sort((a, b) => position.get(a)! - position.get(b)!))
-    .sort((a, b) => first(a) - first(b));
+    .sort((a, b) => position.get(a[0])! - position.get(b[0])!);
 }
