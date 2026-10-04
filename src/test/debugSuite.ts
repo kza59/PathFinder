@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { resolveDebugPath } from '../debugTracker';
 import { buildCallGraph, CallGraph } from '../graphBuilder';
+import { explanationPrompt } from '../explainPath';
 import { DIR_CONFIG_KEY, HotFunction, mapHotCounts } from '../hotPath';
 import { makeNodeId } from '../nodeId';
 import { DebugCase, DEBUG_CASES } from './debugCases';
@@ -80,6 +81,7 @@ async function runCase(root: string, c: DebugCase): Promise<boolean> {
   // At each stop: record the resolved path once the whole stack has arrived, then continue.
   const stops: string[][] = [];
   const counts: Record<string, number>[] = [];
+  const prompts: string[] = [];
   let countsDir: string | undefined;
   const started = vscode.debug.onDidStartDebugSession(session => {
     const dir: unknown = session.configuration[DIR_CONFIG_KEY];
@@ -98,6 +100,7 @@ async function runCase(root: string, c: DebugCase): Promise<boolean> {
           try {
             const reply = await session.customRequest('stackTrace', { threadId, startFrame: 0, levels: 500 });
             stops.push(resolveDebugPath(reply.stackFrames ?? [], graph));
+            prompts.push(await explanationPrompt(session, graph).catch(err => `prompt failed: ${err}`));
             await sleep(COUNTS_MS);
             counts.push(mapHotCounts(readCounts(countsDir), graph).counts);
           } finally {
@@ -144,6 +147,13 @@ async function runCase(root: string, c: DebugCase): Promise<boolean> {
   const lastCounts = counts[counts.length - 1];
   if (sorted(lastCounts ?? {}) !== sorted(expectedCounts)) {
     problems.push(`call counts at the last stop: expected ${countsText(expectedCounts)}; got ${countsText(lastCounts)}`);
+  }
+  const missing = c.promptMentions.filter(text => !(prompts[0] ?? '').includes(text));
+  if (missing.length) {
+    problems.push(`explanation prompt at stop 1 is missing: ${missing.join(', ')}`);
+  }
+  if (process.env.PATHFINDER_SHOW_PROMPT) {
+    log(`    explanation prompt at stop 1:\n${(prompts[0] ?? '(none)').split('\n').map(l => `      | ${l}`).join('\n')}`);
   }
   if (problems.length === 0 && JSON.stringify(actual) === JSON.stringify(expected)) {
     log(`  PASS  ${c.name} (${stops.length} stops)`);

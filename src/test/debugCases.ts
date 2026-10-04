@@ -8,7 +8,13 @@ export interface DebugCase {
   breakpoint: { file: string; lineContains: string };              // a line inside the target's body
   stops: string[][];                                               // expected paths, one per breakpoint hit
   hotCounts: Record<string, number>;                               // calls per function so far, at the last stop
+  promptMentions: string[];                                        // text the AI explanation prompt must contain at stop 1
 }
+
+// sum(1, 2) is the first call to reach the breakpoint.
+const readmePrompt = ['-> ', 'a (int) = 1', 'b (int) = 2'];
+// countdown(3) recurses down to countdown(0), which calls leaf(0).
+const recursionPrompt = ['-> ', 'value (int) = 0', 'n (int) = 3', 'n (int) = 0'];
 
 // main -> function2 -> function1 -> sum, then main -> function2 -> sum (main only calls function2).
 // At the second stop: main, function2 and function1 have run once, and sum twice.
@@ -40,6 +46,7 @@ export const DEBUG_CASES: Record<string, DebugCase[]> = {
     target: { file: 'sum.py', lineContains: 'def sum', symbol: 'sum' },
     breakpoint: { file: 'sum.py', lineContains: 'return a + b' },
     stops: readmeStops('py', ['main.py::<module>']),
+    promptMentions: readmePrompt,
     hotCounts: readmeCounts('py', { 'main.py::<module>': 1 }),
   }],
   test2: [{
@@ -47,6 +54,7 @@ export const DEBUG_CASES: Record<string, DebugCase[]> = {
     target: { file: 'sum.c', lineContains: 'int sum', symbol: 'sum' },
     breakpoint: { file: 'sum.c', lineContains: 'return a + b' },
     stops: readmeStops('c'),
+    promptMentions: readmePrompt,
     hotCounts: readmeCounts('c'),
   }],
   test3: [{
@@ -54,6 +62,7 @@ export const DEBUG_CASES: Record<string, DebugCase[]> = {
     target: { file: 'sum.cpp', lineContains: 'int sum', symbol: 'sum' },
     breakpoint: { file: 'sum.cpp', lineContains: 'return a + b' },
     stops: readmeStops('cpp'),
+    promptMentions: readmePrompt,
     hotCounts: readmeCounts('cpp'),
   }],
   'test5/c': [{
@@ -61,6 +70,7 @@ export const DEBUG_CASES: Record<string, DebugCase[]> = {
     target: { file: 'recursion.c', lineContains: 'int leaf', symbol: 'leaf' },
     breakpoint: { file: 'recursion.c', lineContains: 'return value' },
     stops: recursionStops('recursion.c', 'main.c'),
+    promptMentions: recursionPrompt,
     hotCounts: recursionCounts('recursion.c', 'main.c'),
   }],
   'test5/python': [{
@@ -68,6 +78,7 @@ export const DEBUG_CASES: Record<string, DebugCase[]> = {
     target: { file: 'recursion.py', lineContains: 'def leaf', symbol: 'leaf' },
     breakpoint: { file: 'recursion.py', lineContains: 'return value' },
     stops: recursionStops('recursion.py', 'main.py', ['main.py::<module>']),
+    promptMentions: recursionPrompt,
     hotCounts: recursionCounts('recursion.py', 'main.py', { 'main.py::<module>': 1 }),
   }],
 };
