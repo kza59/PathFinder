@@ -27,6 +27,10 @@
         "title": "PathFind: Test Graph with Workspace Paths"
       },
       {
+        "command": "pathfind.testLargeGraph",
+        "title": "PathFind: Test Large Graph"
+      },
+      {
         "command": "pathfind.testDebugPath",
         "title": "PathFind: Test Debug Path"
       },

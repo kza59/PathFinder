@@ -28,4 +28,12 @@ export interface NodeClickedMessage {
   line: number;
 }
 
-export type WebviewMessage = { type: 'ready' } | NodeClickedMessage;
+// --- copy path feature ---
+/** The current debug path as the breadcrumb shows it, e.g. "main → function2 → sum". */
+export interface CopyPathMessage {
+  type: 'copyPath';
+  text: string;
+}
+// --- end copy path feature ---
+
+export type WebviewMessage = { type: 'ready' } | NodeClickedMessage | CopyPathMessage;

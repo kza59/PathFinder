@@ -74,6 +74,14 @@ export class PathFindPanel implements vscode.Disposable {
           this.nodeClicked.fire({
             type: 'nodeClicked', id: message.id, file: message.file, line: message.line,
           });
+        // --- copy path feature ---
+        } else if (message.type === 'copyPath' && 'text' in message && typeof message.text === 'string' && message.text) {
+          const text = message.text;
+          void vscode.env.clipboard.writeText(text).then(
+            () => vscode.window.showInformationMessage('Path copied to clipboard'),
+            error => vscode.window.showErrorMessage(`PathFind: could not copy path (${error instanceof Error ? error.message : String(error)})`),
+          );
+        // --- end copy path feature ---
         }
       }),
     );
@@ -150,6 +158,13 @@ export class PathFindPanel implements vscode.Disposable {
   <header>
     <div><strong>PathFind</strong><span class="hint">Caller → callee · Longest paths to target · Hover to trace connections</span></div>
     <div class="graph-controls">
+      <form id="search-form" role="search" aria-label="Find a function in the graph">
+        <input id="search-input" type="search" placeholder="Find function" aria-label="Find function" aria-describedby="search-status" autocomplete="off" spellcheck="false">
+        <span id="search-count" hidden></span>
+        <button id="search-submit" type="submit" title="Search / next match (Enter)">Search</button>
+        <button id="search-previous" class="search-arrow" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)" disabled>&#8593;</button>
+        <button id="search-next" class="search-arrow" type="button" aria-label="Next match" title="Next match (Enter)" disabled>&#8595;</button>
+      </form>
       <select id="layout-mode" aria-label="Graph layout">
         <option value="trace">Trace</option>
         <option value="explore">Explore</option>
@@ -178,9 +193,16 @@ export class PathFindPanel implements vscode.Disposable {
     <!-- --- end legend feature --- -->
   </main>
   <footer>
+    <span id="search-status" role="status" aria-live="polite">Enter a function name</span>
     <!-- --- breadcrumb feature --- -->
     <nav id="breadcrumb" aria-label="Current call path" hidden></nav>
     <!-- --- end breadcrumb feature --- -->
+    <!-- --- copy path feature --- enabled by media/graph.ts while the breadcrumb shows a path -->
+    <button id="copy-path" type="button" title="Copy the current call path as text" disabled>Copy path</button>
+    <!-- --- end copy path feature --- -->
+    <!-- --- replay feature --- enabled by media/graph.ts while the breadcrumb shows a path -->
+    <button id="replay-path" type="button" title="Replay the call path, outer caller to current function" disabled>Replay</button>
+    <!-- --- end replay feature --- -->
     <span id="runtime" role="status" aria-live="polite">No runtime path</span>
     <span id="selection">Click a function to see its source location</span>
   </footer>

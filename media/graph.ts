@@ -1,5 +1,6 @@
 import cytoscape, { type Core, type ElementDefinition, type Layouts, type NodeSingular, type StylesheetJson } from 'cytoscape';
 import cola from 'cytoscape-cola';
+import { GraphSearch, type SearchState } from './graphSearch';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
 import type { DebugPath, GraphData, GraphMessage, GraphNode, WebviewMessage } from '../src/types';
@@ -144,6 +145,13 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
       selector: 'edge.hover-in, edge.hover-out',
       style: { opacity: 1, width: 5, 'arrow-scale': 1.6, 'z-index': 10 },
     },
+    {
+      selector: 'node.search-hit',
+      style: {
+        opacity: 1,
+        'overlay-color': '#4fc1ff', 'overlay-opacity': 0.25, 'overlay-padding': 12,
+      },
+    },
   ];
 }
 
@@ -154,13 +162,16 @@ export class GraphRenderer {
   private exploreLayout?: Layouts;
   private staticPositions = new Map<string, { x: number; y: number }>();
   public layout: TargetLayout | undefined;
+  public readonly search: GraphSearch;
 
   constructor(
     private readonly cy: Core,
     private readonly graphRendered: (nodeCount: number) => void = () => {},
     private readonly pathChanged: (current: GraphNode | undefined, active: boolean) => void = () => {},
+    searchChanged: (state: SearchState) => void = () => {},
   ) {
     this.cy.autoungrabify(true);
+    this.search = new GraphSearch(cy, searchChanged);
   }
 
   public get layoutMode(): LayoutMode {
@@ -221,10 +232,12 @@ export class GraphRenderer {
   }
 
   public dispose(): void {
+    this.search.dispose();
     this.stopExploreLayout();
   }
 
   public renderGraph(graph: GraphData): void {
+    this.search.clear();
     this.stopExploreLayout();
     this.hoveredId = undefined;
     this.layout = targetLayout(graph);
@@ -334,6 +347,11 @@ export function initializeGraphWebview(): void {
   const empty = document.getElementById('empty')!;
   const runtime = document.getElementById('runtime')!;
   const selection = document.getElementById('selection')!;
+  const searchInput = document.getElementById('search-input') as HTMLInputElement;
+  const searchCount = document.getElementById('search-count')!;
+  const searchStatus = document.getElementById('search-status')!;
+  const searchPrevious = document.getElementById('search-previous') as HTMLButtonElement;
+  const searchNext = document.getElementById('search-next') as HTMLButtonElement;
   const theme = getComputedStyle(document.body);
   const cy = cytoscape({
     container,
@@ -350,12 +368,39 @@ export function initializeGraphWebview(): void {
     empty.hidden = count > 0;
     empty.textContent = 'No functions in this graph';
     selection.textContent = 'Click a function to see its source location';
+    searchInput.value = '';
     renderLayoutLabels();
   }, (current, active) => {
     runtime.textContent = current
       ? `You are here: ${current.label} · ${fileName(current.file)}:${current.line}`
       : active ? 'Current function is outside this graph' : 'No runtime path';
+  }, state => {
+    searchCount.textContent = state.count ? `${state.index + 1} of ${state.count}` : 'No results';
+    searchCount.hidden = !state.query;
+    searchPrevious.disabled = searchNext.disabled = state.count === 0;
+    searchInput.setAttribute('aria-invalid', String(!!state.query && state.count === 0));
+    searchStatus.textContent = state.node
+      ? `${state.node.label} — ${fileName(state.node.file)}:${state.node.line}`
+      : state.query ? 'No matching functions' : 'Enter a function name';
+    searchStatus.title = state.node ? `${state.node.file}:${state.node.line}` : '';
   });
+
+  searchInput.addEventListener('input', () => renderer.search.find(searchInput.value));
+  document.getElementById('search-form')!.addEventListener('submit', event => {
+    event.preventDefault();
+    renderer.search.move(1);
+  });
+  searchInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && event.shiftKey) {
+      event.preventDefault();
+      renderer.search.move(-1);
+    } else if (event.key === 'Escape') {
+      searchInput.value = '';
+      renderer.search.clear();
+    }
+  });
+  searchPrevious.addEventListener('click', () => renderer.search.move(-1));
+  searchNext.addEventListener('click', () => renderer.search.move(1));
 
   const layoutLabels = document.getElementById('layout-labels')!;
   const renderLayoutLabels = () => {
@@ -568,7 +613,76 @@ export function initializeGraphWebview(): void {
     renderBreadcrumb();
   });
   // --- end breadcrumb feature ---
+
+  // --- copy path feature ---
+  // The text is read from the rendered breadcrumb crumbs, so it is exactly what the breadcrumb shows
+  // (same labels, same collapsed "(outside graph ×N)" crumbs). The extension writes the clipboard,
+  // since clipboard access inside a webview is unreliable.
+  const copyPathButton = document.getElementById('copy-path') as HTMLButtonElement;
+  const syncCopyPathButton = () => {
+    copyPathButton.disabled = breadcrumb.hidden;
+  };
+  copyPathButton.addEventListener('click', () => {
+    const text = Array.from(breadcrumb.querySelectorAll('.crumb'), crumb => crumb.textContent ?? '').join(' → ');
+    if (text) {
+      vscode.postMessage({ type: 'copyPath', text });
+    }
+  });
+  // Registered after the breadcrumb's listener, so the breadcrumb is already re-rendered here.
+  window.addEventListener('message', syncCopyPathButton);
+  syncCopyPathButton();
+  // --- end copy path feature ---
+
+  // --- replay feature ---
+  // Replays the path by calling the renderer's own highlightPath on a growing prefix of it, so every
+  // frame uses the existing path / current / dimmed styling. The last frame is the full path, which
+  // leaves exactly the state a debugPath message produces.
+  const REPLAY_STEP_MS = 500;
+  const replayButton = document.getElementById('replay-path') as HTMLButtonElement;
+  let replayPath: DebugPath = [];
+  let replayTimer: ReturnType<typeof setTimeout> | undefined;
+  const stopReplay = () => {
+    clearTimeout(replayTimer);
+    replayTimer = undefined;
+  };
+  replayButton.addEventListener('click', () => {
+    stopReplay(); // clicking while playing restarts from the beginning
+    const path = [...replayPath];
+    // One frame per path entry that is a node in this graph (an "(outside graph)" placeholder
+    // would show no change), plus the full path as the final frame.
+    const ends = path
+      .map((id, index) => (cy.getElementById(id).isNode() ? index + 1 : 0))
+      .filter(end => end > 0 && end < path.length);
+    const frames = [0, ...ends, path.length];
+    const step = (frame: number) => {
+      renderer.highlightPath(path.slice(0, frames[frame]));
+      replayTimer = frame + 1 < frames.length ? setTimeout(() => step(frame + 1), REPLAY_STEP_MS) : undefined;
+    };
+    step(0);
+  });
+  // Registered after the renderer's listener, which has already applied the new highlight.
+  window.addEventListener('message', (event: MessageEvent<GraphMessage>) => {
+    const message = event.data;
+    if (!message || typeof message !== 'object') {
+      return;
+    }
+    if (message.type === 'debugPath') {
+      stopReplay();
+      replayPath = [...message.path];
+    } else if (message.type === 'debugClear') {
+      stopReplay();
+      replayPath = [];
+    } else if (message.type === 'graph' && replayTimer !== undefined) {
+      // renderGraph re-applied the half-replayed prefix; show the full path instead.
+      stopReplay();
+      renderer.highlightPath(replayPath);
+    }
+    replayButton.disabled = breadcrumb.hidden;
+  });
+  replayButton.disabled = breadcrumb.hidden;
+  // --- end replay feature ---
   window.addEventListener('unload', () => {
+    stopReplay(); // replay feature
     observer.disconnect();
     renderer.dispose();
     cy.destroy();
