@@ -10,6 +10,8 @@
         // Extensions PathFinder doesn't need, turned off to speed up the test window (unknown IDs are ignored).
         // Keep Python/Pylance/debugpy and Microsoft C/C++ enabled: call hierarchy and debugging come from them.
         // Keep this list in sync with DISABLED_EXTENSIONS in src/test/runTest.ts.
+        // An installed (packaged) copy of PathFinder would claim the command names first and stop this one starting.
+        "--disable-extension=pathfinder-team.pathfinder",
         "--disable-extension=ms-toolsai.jupyter",
         "--disable-extension=stmicroelectronics.stm32-vscode-extension",
         "--disable-extension=stmicroelectronics.stm32cube-ide-build-analyzer",
@@ -47,7 +49,7 @@
       "id": "fixture",
       "type": "pickString",
       "description": "Folder to open in the Extension Development Host",
-      "options": ["test1", "test2", "test3", "test4/python", "test4/cpp", "test5/python", "test5/c", "test6", "test7/python", "test7/cpp", "test8"],
+      "options": ["test1", "test2", "test3", "test4/python", "test4/cpp", "test5/python", "test5/c", "test6", "test7/python", "test7/cpp", "test8", "test9/python", "test9/c", "test9/cpp"],
       "default": "test1"
     }
   ]
