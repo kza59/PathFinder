@@ -85,3 +85,32 @@ footer {
   white-space: nowrap;
   color: var(--vscode-descriptionForeground, #b0b0b0);
 }
+
+/* --- hover tooltip feature --- */
+#node-tooltip {
+  position: absolute;
+  z-index: 10;
+  max-width: min(320px, calc(100% - 12px));
+  padding: 6px 9px;
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, #454545));
+  border-radius: 3px;
+  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editor-foreground, #d4d4d4));
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-sideBar-background, #252526));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+  pointer-events: none;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+#node-tooltip[hidden] {
+  display: none;
+}
+
+#node-tooltip .tooltip-name {
+  font-weight: bold;
+}
+
+#node-tooltip .tooltip-lines {
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+/* --- end hover tooltip feature --- */

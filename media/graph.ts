@@ -189,6 +189,66 @@ export function initializeGraphWebview(): void {
     selection.title = node.file;
     vscode.postMessage({ type: 'nodeClicked', id: node.id, file: node.file, line: node.line });
   });
+
+  // --- hover tooltip feature ---
+  // Positioned in the coordinate space of <main> (which #graph fills exactly), so
+  // Cytoscape's rendered coordinates can be used directly as CSS offsets.
+  const tooltipHost = container.parentElement!;
+  const tooltip = document.createElement('div');
+  tooltip.id = 'node-tooltip';
+  tooltip.setAttribute('role', 'tooltip');
+  tooltip.hidden = true;
+  const tooltipName = tooltip.appendChild(document.createElement('div'));
+  tooltipName.className = 'tooltip-name';
+  const tooltipFile = tooltip.appendChild(document.createElement('div'));
+  const tooltipLines = tooltip.appendChild(document.createElement('div'));
+  tooltipLines.className = 'tooltip-lines';
+  tooltipHost.appendChild(tooltip);
+
+  const TOOLTIP_OFFSET = 14;
+  const TOOLTIP_MARGIN = 6;
+  const moveTooltip = (x: number, y: number) => {
+    const maxX = tooltipHost.clientWidth - tooltip.offsetWidth - TOOLTIP_MARGIN;
+    const maxY = tooltipHost.clientHeight - tooltip.offsetHeight - TOOLTIP_MARGIN;
+    // Prefer below-right of the cursor; flip to the other side when it would overflow.
+    let left = x + TOOLTIP_OFFSET;
+    let top = y + TOOLTIP_OFFSET;
+    if (left > maxX) {
+      left = x - TOOLTIP_OFFSET - tooltip.offsetWidth;
+    }
+    if (top > maxY) {
+      top = y - TOOLTIP_OFFSET - tooltip.offsetHeight;
+    }
+    // Final clamp covers panels too small for either side.
+    tooltip.style.left = `${Math.max(TOOLTIP_MARGIN, Math.min(left, maxX))}px`;
+    tooltip.style.top = `${Math.max(TOOLTIP_MARGIN, Math.min(top, maxY))}px`;
+  };
+  const hideTooltip = () => {
+    tooltip.hidden = true;
+  };
+
+  cy.on('mouseover', 'node', event => {
+    const node = event.target.data() as GraphNode;
+    tooltipName.textContent = node.label;
+    tooltipFile.textContent = fileName(node.file);
+    tooltipLines.textContent = node.endLine > node.line
+      ? `lines ${node.line}–${node.endLine}`
+      : `line ${node.line}`;
+    tooltip.hidden = false;
+    moveTooltip(event.renderedPosition.x, event.renderedPosition.y);
+  });
+  cy.on('mousemove', 'node', event => {
+    if (!tooltip.hidden) {
+      moveTooltip(event.renderedPosition.x, event.renderedPosition.y);
+    }
+  });
+  cy.on('mouseout', 'node', hideTooltip);
+  // A node can vanish or move out from under a still cursor (new graph, pan, zoom, drag)
+  // without Cytoscape firing mouseout, so hide on those too.
+  cy.on('remove', 'node', hideTooltip);
+  cy.on('viewport grab', hideTooltip);
+  container.addEventListener('mouseleave', hideTooltip);
+  // --- end hover tooltip feature ---
   document.getElementById('fit')!.addEventListener('click', () => {
     if (cy.nodes().length) {
       cy.fit(undefined, 40);
