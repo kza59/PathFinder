@@ -4,6 +4,25 @@ Concrete issue example: consider someone who is working on another person's very
 For instance, consider sum() which is called many times in the example below. When the code executes, it should be made clear to the user at which times, and HOW the sum() function is being called.
 The "optimal" design would of course be if somehow you could right click a print statement or something and immediately see the "touch" that way.
 
+## Minimal Test Plan
+
+**Objective:** Verify that PathFinder displays every call path leading to a selected function, and that the graph reflects the program's actual execution in real time.
+
+**Preconditions**
+- The extension is built (`npm run compile`) and running in the Extension Development Host.
+- A sample program is open in which the target function is reached through several paths (e.g., `sum()` in the example below).
+- The language extension for that program is installed and has finished loading (e.g., Pylance for Python, C/C++ for C and C++).
+
+| # | Action | Expected Result |
+|---|--------|-----------------|
+| 1 | Right-click the target function (e.g., `sum()`) and select **PathFind**. | A graph opens showing the target function and every function that can call it, directly or indirectly. No paths are highlighted yet. |
+| 2 | Start debugging (**F5**) and step through the program using the standard debugger controls. | Each time the target function is reached (a "touch"), the graph updates immediately. The path of the most recent touch is drawn in a distinct highlight color (e.g., magenta). |
+| 3 | Continue stepping past the final call to the target function, then pause. | The most recent touch remains highlighted, so it is clear how the function was last reached. |
+| 4 | Restart and run the program to completion without stepping. | The final graph matches the result of step 3: the same touch counts and the same most recent path. |
+| 5 | Inspect the graph after execution. | Frequently taken paths are drawn hotter (brighter); paths taken less often, or not at all, are dimmer. |
+
+**Pass criteria:** All expected results are observed, and the touch counts on each path match the number of times the program actually took that path.
+
 Concrete example:
 sum function defined in sum.py
 def sum(a,b):
