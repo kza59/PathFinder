@@ -38,6 +38,10 @@ function fixture() {
       findNodeForFrame: (data: GraphData, file: string, line: number) =>
         data.nodes.find(node => node.file === file && node.line <= line && line <= node.endLine),
     },
+    // --- call values feature --- real modules; these sessions have no Python type, so no capture runs
+    fs,
+    './callValues': require('../callValues'),
+    // --- end call values feature ---
   };
   runInNewContext(fs.readFileSync(path.join(__dirname, '../debugTracker.js'), 'utf8'), {
     exports: moduleExports,
