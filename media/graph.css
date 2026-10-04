@@ -490,3 +490,38 @@ footer {
   background: var(--vscode-button-background, #0e639c);
 }
 /* --- end replay feature --- */
+
+/* --- session history --- */
+#history {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#history[hidden] {
+  display: none;
+}
+
+#history button {
+  padding: 3px 7px;
+}
+
+#history button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#history-slider {
+  width: clamp(80px, 18vw, 220px);
+  accent-color: var(--vscode-focusBorder, #4fc1ff);
+}
+
+#history-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+/* --- end session history --- */
