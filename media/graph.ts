@@ -23,7 +23,7 @@ const BREAKPOINT_DOT = `data:image/svg+xml;utf8,${encodeURIComponent(
 
 export const layoutOptions = {
   name: 'preset' as const,
-  padding: 80,
+  padding: 20,
   animate: false,
 };
 
