@@ -5,6 +5,7 @@ export type { GraphEdge, GraphNode } from './graphBuilder';
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  targetIds?: string[];
 }
 
 export type DebugPath = string[];

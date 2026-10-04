@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { makeNodeId, MODULE_NAME, normalizePath } from './nodeId';
+import { markRecursion } from './recursion';
 
 export interface GraphNode {
   id: string;       // makeNodeId(file, label)
@@ -8,17 +9,21 @@ export interface GraphNode {
   file: string;     // absolute path of the definition (never a prototype), for jump-to-source
   line: number;     // 1-based line of the function name (same base as debugger frames)
   endLine: number;  // 1-based last line of the function body
+  recursionGroup?: number; // set on nodes in a recursive structure; members of the same cycle share the number
 }
 
 export interface GraphEdge {
   from: string;     // caller id
   to: string;       // callee id
   lines: number[];  // 1-based lines in the caller's file where it calls the callee, ascending (one per call site)
+  recursive?: true; // set when both ends share a recursionGroup, i.e. this call is part of a cycle
 }
 
 export interface CallGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  /** Resolved functions selected by PathFind, independent of node order and recursion. */
+  targetIds?: string[];
 }
 
 export interface BuildOptions {
@@ -212,8 +217,8 @@ class GraphBuilder {
     this.edges.set(key, edge);
   }
 
-  result(): CallGraph {
-    return { nodes: [...this.nodes.values()], edges: [...this.edges.values()] };
+  result(targetIds: string[]): CallGraph {
+    return markRecursion({ nodes: [...this.nodes.values()], edges: [...this.edges.values()], targetIds });
   }
 }
 
@@ -238,9 +243,11 @@ export async function buildCallGraph(
   prepared.forEach(item => builder.trace(`prepared: ${describeItem(item)}`));
   type Entry = { item: vscode.CallHierarchyItem; id: string };
   let frontier: Entry[] = [];
+  const targetIds = new Set<string>();
   for (const preparedItem of prepared) {
     const item = await builder.toDefinition(preparedItem);
     const { id, isNew } = await builder.addNode(item);
+    targetIds.add(id);
     if (isNew) {
       frontier.push({ item, id });
     }
@@ -282,5 +289,5 @@ export async function buildCallGraph(
     frontier = next;
   }
 
-  return builder.result();
+  return builder.result([...targetIds]);
 }

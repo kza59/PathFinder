@@ -4,6 +4,7 @@ import { registerGraphRendererTestCommands } from './test/graphRendererTest';
 import { PathFindPanel } from './webview/PathFindPanel';
 import { registerDebugTracker } from './debugTracker';
 import { registerHotPathCounting } from './hotPath'; // hot-path counting
+import { registerRecursionLog } from './recursionLog';
 
 export function activate(context: vscode.ExtensionContext) {
   registerGraphRendererTestCommands(context);
@@ -12,6 +13,7 @@ export function activate(context: vscode.ExtensionContext) {
   // --- hot-path counting ---
   registerHotPathCounting(context);
   // --- end hot-path counting ---
+  // registerRecursionLog(context); // TEMPORARY: see src/recursionLog.ts
 
   // --- click-to-code feature ---
   // The panel is created lazily (and re-created after it's closed), so subscribe per panel instance.

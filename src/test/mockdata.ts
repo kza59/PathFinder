@@ -1,6 +1,7 @@
 import type { DebugPath, GraphData } from '../types';
 
 export const mockGraph: GraphData = {
+  targetIds: ['sum.py::sum'],
   nodes: [
     {
       id: "sum.py::sum",

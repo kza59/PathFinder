@@ -11,6 +11,7 @@ export interface Case {
   symbol: string;       // ...at the first occurrence of this name on it
   nodes: string[];
   edges: ExpectedEdge[];
+  recursionGroups?: string[][]; // node ids that form each recursive structure; omitted = no recursion expected
 }
 
 interface ReadmeLines {
@@ -40,6 +41,84 @@ const pyGraph = readmeGraph('py',
 const cLines: ReadmeLines = { f1Sum: 6, f2Sum: 8, f3Sum: 12, f2F1: 7, f3F1: [11, 13], f3F2: 10, mainF2: 5 };
 const cGraph = readmeGraph('c', cLines);
 const cppGraph = readmeGraph('cpp', cLines);
+
+// All 15 functions reach sum; the longest function path spans six levels.
+const searchGraph = {
+  nodes: ['sum.py::sum', 'calculations.py::calculateTotal', 'calculations.py::validateTotal', 'helpers.py::_helper',
+    'user.py::save', 'order.py::save', 'storage.py::saveCache', 'storage.py::saveSnapshot',
+    'workflow.py::runWorkflow', 'workflow.py::runReports', 'processing.py::processBatch', 'processing.py::buildReport',
+    'records.py::processRecord', 'records.py::summarizeRecords',
+    'main.py::main', 'main.py::<module>'],
+  edges: [
+    ['calculations.py::calculateTotal', 'sum.py::sum', [8]],
+    ['calculations.py::validateTotal', 'sum.py::sum', [13]],
+    ['helpers.py::_helper', 'sum.py::sum', [7]],
+    ['user.py::save', 'sum.py::sum', [7]],
+    ['order.py::save', 'sum.py::sum', [7]],
+    ['storage.py::saveCache', 'sum.py::sum', [7]],
+    ['storage.py::saveSnapshot', 'sum.py::sum', [11]],
+    ['main.py::main', 'sum.py::sum', [14]],
+    ['main.py::main', 'calculations.py::calculateTotal', [15]],
+    ['main.py::main', 'helpers.py::_helper', [16]],
+    ['main.py::main', 'user.py::save', [17]],
+    ['main.py::main', 'order.py::save', [18]],
+    ['main.py::main', 'storage.py::saveCache', [19]],
+    ['main.py::main', 'storage.py::saveSnapshot', [20]],
+    ['main.py::main', 'workflow.py::runWorkflow', [21]],
+    ['main.py::main', 'workflow.py::runReports', [22]],
+    ['main.py::<module>', 'main.py::main', [29]],
+    ['workflow.py::runWorkflow', 'processing.py::processBatch', [7]],
+    ['workflow.py::runWorkflow', 'processing.py::buildReport', [8]],
+    ['workflow.py::runReports', 'processing.py::buildReport', [13]],
+    ['workflow.py::runReports', 'processing.py::processBatch', [14]],
+    ['processing.py::processBatch', 'records.py::processRecord', [7, 8]],
+    ['processing.py::buildReport', 'records.py::summarizeRecords', [13]],
+    ['processing.py::buildReport', 'records.py::processRecord', [14]],
+    ['records.py::processRecord', 'calculations.py::calculateTotal', [11]],
+    ['records.py::processRecord', 'calculations.py::validateTotal', [12]],
+    ['records.py::processRecord', 'helpers.py::_helper', [14]],
+    ['records.py::processRecord', 'user.py::save', [15]],
+    ['records.py::processRecord', 'order.py::save', [16]],
+    ['records.py::summarizeRecords', 'calculations.py::calculateTotal', [21]],
+    ['records.py::summarizeRecords', 'calculations.py::validateTotal', [22]],
+    ['records.py::summarizeRecords', 'storage.py::saveCache', [24]],
+    ['records.py::summarizeRecords', 'storage.py::saveSnapshot', [25]],
+  ] as ExpectedEdge[],
+};
+
+// Same three recursive shapes in both languages: a function calling itself (countdown), two calling each
+// other (is_even <-> is_odd), and a three-function loop (step_a -> step_b -> step_c -> step_a).
+const recursionGraph = (rec: string, main: string, l: Record<string, number>, extraNodes: string[] = [], extraEdges: ExpectedEdge[] = []) => ({
+  nodes: [`${rec}::leaf`, `${rec}::countdown`, `${rec}::is_even`, `${rec}::is_odd`,
+    `${rec}::step_a`, `${rec}::step_b`, `${rec}::step_c`, `${main}::main`, ...extraNodes],
+  edges: [
+    [`${rec}::countdown`, `${rec}::leaf`, [l.countdownLeaf]],
+    [`${rec}::countdown`, `${rec}::countdown`, [l.countdownSelf]],
+    [`${rec}::is_even`, `${rec}::leaf`, [l.evenLeaf]],
+    [`${rec}::is_odd`, `${rec}::leaf`, [l.oddLeaf]],
+    [`${rec}::is_even`, `${rec}::is_odd`, [l.evenOdd]],
+    [`${rec}::is_odd`, `${rec}::is_even`, [l.oddEven]],
+    [`${rec}::step_c`, `${rec}::leaf`, [l.cLeaf]],
+    [`${rec}::step_a`, `${rec}::step_b`, [l.ab]],
+    [`${rec}::step_b`, `${rec}::step_c`, [l.bc]],
+    [`${rec}::step_c`, `${rec}::step_a`, [l.ca]],
+    [`${main}::main`, `${rec}::countdown`, [5]],
+    [`${main}::main`, `${rec}::is_even`, [6]],
+    [`${main}::main`, `${rec}::step_a`, [7]],
+    ...extraEdges,
+  ] as ExpectedEdge[],
+  recursionGroups: [
+    [`${rec}::countdown`],
+    [`${rec}::is_even`, `${rec}::is_odd`],
+    [`${rec}::step_a`, `${rec}::step_b`, `${rec}::step_c`],
+  ],
+});
+
+const pyRecursion = recursionGraph('recursion.py', 'main.py',
+  { countdownLeaf: 7, countdownSelf: 8, evenLeaf: 13, oddLeaf: 19, evenOdd: 14, oddEven: 20, cLeaf: 33, ab: 24, bc: 28, ca: 34 },
+  ['main.py::<module>'], [['main.py::<module>', 'main.py::main', [11]]]);
+const cRecursion = recursionGraph('recursion.c', 'main.c',
+  { countdownLeaf: 11, countdownSelf: 12, evenLeaf: 18, oddLeaf: 25, evenOdd: 19, oddEven: 26, cLeaf: 42, ab: 31, bc: 36, ca: 43 });
 
 export const CASES: Record<string, Case[]> = {
   test1: [
@@ -105,5 +184,35 @@ export const CASES: Record<string, Case[]> = {
         ['main.cpp::main', 'main.cpp::dog_owner', [15]],
       ],
     },
+  ],
+  'test5/python': [
+    { name: 'python recursion: all three shapes reach leaf', file: 'recursion.py', lineContains: 'def leaf', symbol: 'leaf', ...pyRecursion },
+    {
+      name: 'python recursion: the right-clicked function is itself recursive', file: 'recursion.py', lineContains: 'def countdown', symbol: 'countdown',
+      nodes: ['recursion.py::countdown', 'main.py::main', 'main.py::<module>'],
+      edges: [
+        ['recursion.py::countdown', 'recursion.py::countdown', [8]],
+        ['main.py::main', 'recursion.py::countdown', [5]],
+        ['main.py::<module>', 'main.py::main', [11]],
+      ],
+      recursionGroups: [['recursion.py::countdown']],
+    },
+  ],
+  'test5/c': [
+    { name: 'C recursion: all three shapes reach leaf', file: 'recursion.c', lineContains: 'int leaf', symbol: 'leaf', ...cRecursion },
+    { name: 'C recursion: from the prototype in the header', file: 'recursion.h', lineContains: 'int leaf', symbol: 'leaf', ...cRecursion },
+    {
+      name: 'C recursion: the right-clicked function is itself recursive', file: 'recursion.c', lineContains: 'int countdown', symbol: 'countdown',
+      nodes: ['recursion.c::countdown', 'main.c::main'],
+      edges: [
+        ['recursion.c::countdown', 'recursion.c::countdown', [12]],
+        ['main.c::main', 'recursion.c::countdown', [5]],
+      ],
+      recursionGroups: [['recursion.c::countdown']],
+    },
+  ],
+  'test6': [
+    { name: 'python search fixture: definition', file: 'sum.py', lineContains: 'def sum', symbol: 'sum', ...searchGraph },
+    { name: 'python search fixture: call site', file: 'helpers.py', lineContains: 'return sum(value, 1)', symbol: 'sum', ...searchGraph },
   ],
 };
