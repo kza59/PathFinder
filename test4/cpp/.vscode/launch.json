@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Builds with `make` (debug info, no optimisation) and debugs ./main with gdb.
+      "name": "Debug main",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/main",
+      "cwd": "${workspaceFolder}",
+      "MIMode": "gdb",
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "preLaunchTask": "build"
+    }
+  ]
+}
