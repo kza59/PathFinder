@@ -54,3 +54,9 @@ def main():
 	function3()
 
 see example.png for how this call graph should look like.
+
+When the debug session supplying the displayed call path ends, PathFind clears
+the live path, current-function marker, and runtime dimming. The graph returns
+to its static view while retaining the final heatmap counts and the current
+layout and viewport. Ending an unrelated debug session preserves the displayed
+session's path.

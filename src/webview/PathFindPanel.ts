@@ -189,6 +189,15 @@ export class PathFindPanel implements vscode.Disposable {
         <li><span class="swatch edge incoming" aria-hidden="true"></span>Calls hovered function</li>
         <li><span class="swatch edge outgoing" aria-hidden="true"></span>Called by hovered function</li>
       </ul>
+      <!-- --- heatmap feature --- -->
+      <div id="heat-legend" hidden>
+        <strong>Calls this session</strong>
+        <div id="heat-scale" role="img"></div>
+        <div class="heat-range"><span id="heat-low"></span><span id="heat-high"></span></div>
+        <p id="heat-note"></p>
+        <p>Normal fill: no recorded calls. Existing dimming still applies.</p>
+      </div>
+      <!-- --- end heatmap feature --- -->
     </details>
     <!-- --- end legend feature --- -->
   </main>

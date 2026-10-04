@@ -1,9 +1,10 @@
 import cytoscape, { type Core, type ElementDefinition, type Layouts, type NodeSingular, type StylesheetJson } from 'cytoscape';
 import cola from 'cytoscape-cola';
 import { GraphSearch, type SearchState } from './graphSearch';
+import { heatColor, heatPalette, heatPosition, type HeatRange } from './heatmap';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
-import type { DebugPath, GraphData, GraphMessage, GraphNode, WebviewMessage } from '../src/types';
+import type { DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, WebviewMessage } from '../src/types';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
 
@@ -24,6 +25,7 @@ const nodeLabel = (node: NodeSingular): string => [
 ].join('\n');
 
 export function graphStyles(foreground = '#d4d4d4', background = '#252526'): StylesheetJson {
+  const palette = heatPalette(foreground);
   return [
     {
       selector: 'node',
@@ -44,6 +46,11 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
         'text-max-width': `${NODE_WIDTH - 20}px`,
         'overlay-opacity': 0,
       },
+    },
+    {
+      // Heat changes only the fill; borders, halos, opacity and search overlays still compose.
+      selector: 'node.heat-counted',
+      style: { 'background-color': (node: NodeSingular) => heatColor(node.data('heatPosition'), palette) },
     },
     {
       selector: 'node.target',
@@ -157,6 +164,8 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
 
 export class GraphRenderer {
   private path: DebugPath = [];
+  private hotCounts = new Map<string, number>();
+  public heatRange: HeatRange | undefined;
   private hoveredId: string | undefined;
   private mode: LayoutMode = 'trace';
   private exploreLayout?: Layouts;
@@ -169,6 +178,7 @@ export class GraphRenderer {
     private readonly graphRendered: (nodeCount: number) => void = () => {},
     private readonly pathChanged: (current: GraphNode | undefined, active: boolean) => void = () => {},
     searchChanged: (state: SearchState) => void = () => {},
+    private readonly heatChanged: (range: HeatRange | undefined) => void = () => {},
   ) {
     this.cy.autoungrabify(true);
     this.search = new GraphSearch(cy, searchChanged);
@@ -283,7 +293,42 @@ export class GraphRenderer {
     this.staticPositions = new Map(this.cy.nodes().map(node => [node.id(), { ...node.position() }]));
     if (this.mode === 'explore') this.applyLayoutMode();
     this.highlightPath(this.path);
+    this.applyHotCounts();
     this.graphRendered(this.cy.nodes().length);
+  }
+
+  public setHotCounts(counts: HotCounts): void {
+    // Messages contain full cumulative snapshots, not deltas. Retain IDs received before a graph.
+    this.hotCounts = new Map(Object.entries(counts).filter(([, count]) => Number.isSafeInteger(count) && count > 0));
+    this.applyHotCounts();
+  }
+
+  public getHotCount(id: string): number | undefined {
+    return this.hotCounts.get(id);
+  }
+
+  private applyHotCounts(): void {
+    const counted: { node: NodeSingular; count: number }[] = [];
+    let min = Infinity;
+    let max = 0;
+    for (const [id, count] of this.hotCounts) {
+      const node = this.cy.getElementById(id);
+      if (!node.isNode()) continue;
+      counted.push({ node, count });
+      min = Math.min(min, count);
+      max = Math.max(max, count);
+    }
+    const range = counted.length ? { min, max } : undefined;
+    this.heatRange = range;
+    this.cy.batch(() => {
+      this.cy.nodes().removeClass('heat-counted').removeData('heatPosition');
+      if (range) {
+        for (const { node, count } of counted) {
+          node.data('heatPosition', heatPosition(count, range)).addClass('heat-counted');
+        }
+      }
+    });
+    this.heatChanged(range);
   }
 
   public highlightPath(path: DebugPath): void {
@@ -353,11 +398,20 @@ export function initializeGraphWebview(): void {
   const searchPrevious = document.getElementById('search-previous') as HTMLButtonElement;
   const searchNext = document.getElementById('search-next') as HTMLButtonElement;
   const theme = getComputedStyle(document.body);
+  const foreground = theme.getPropertyValue('--vscode-editor-foreground').trim() || '#d4d4d4';
+  const palette = heatPalette(foreground);
+  const heatLegend = document.getElementById('heat-legend')!;
+  const heatScale = document.getElementById('heat-scale')!;
+  const heatLow = document.getElementById('heat-low')!;
+  const heatHigh = document.getElementById('heat-high')!;
+  const heatNote = document.getElementById('heat-note')!;
+  let tooltipNodeId: string | undefined;
+  let tooltipPosition: { x: number; y: number } | undefined;
   const cy = cytoscape({
     container,
     elements: [],
     style: graphStyles(
-      theme.getPropertyValue('--vscode-editor-foreground').trim() || '#d4d4d4',
+      foreground,
       theme.getPropertyValue('--vscode-sideBar-background').trim() || '#252526',
     ),
     layout: { name: 'preset' },
@@ -383,6 +437,23 @@ export function initializeGraphWebview(): void {
       ? `${state.node.label} — ${fileName(state.node.file)}:${state.node.line}`
       : state.query ? 'No matching functions' : 'Enter a function name';
     searchStatus.title = state.node ? `${state.node.file}:${state.node.line}` : '';
+  }, range => {
+    heatLegend.hidden = !range;
+    if (range) {
+      const equal = range.min === range.max;
+      heatLow.textContent = `${range.min.toLocaleString()}${equal ? ' calls' : ' (blue)'}`;
+      heatHigh.textContent = equal ? 'Midpoint color' : `${range.max.toLocaleString()} (red)`;
+      heatScale.style.background = equal
+        ? heatColor(0.5, palette)
+        : `linear-gradient(to right, ${heatColor(0, palette)}, ${heatColor(1, palette)})`;
+      heatScale.setAttribute('aria-label', equal
+        ? `All recorded functions have ${range.min} calls; midpoint color`
+        : `${range.min} calls in blue to ${range.max} calls in red`);
+      heatNote.textContent = equal
+        ? 'Equal counts use the midpoint color.'
+        : 'Linear scale for this graph; colors rescale as counts change.';
+    }
+    if (tooltipNodeId !== undefined) refreshTooltipCount();
   });
 
   searchInput.addEventListener('input', () => renderer.search.find(searchInput.value));
@@ -446,7 +517,13 @@ export function initializeGraphWebview(): void {
   tooltipLines.className = 'tooltip-lines';
   const tooltipConnections = tooltip.appendChild(document.createElement('div'));
   const tooltipDistance = tooltip.appendChild(document.createElement('div'));
+  const tooltipCalls = tooltip.appendChild(document.createElement('div'));
   tooltipHost.appendChild(tooltip);
+  const refreshTooltipCount = () => {
+    const count = tooltipNodeId === undefined ? undefined : renderer.getHotCount(tooltipNodeId);
+    tooltipCalls.textContent = count === undefined ? 'No recorded calls' : `Recorded calls this session: ${count.toLocaleString()}`;
+    if (!tooltip.hidden && tooltipPosition) moveTooltip(tooltipPosition.x, tooltipPosition.y);
+  };
 
   const TOOLTIP_OFFSET = 14;
   const TOOLTIP_MARGIN = 6;
@@ -468,11 +545,16 @@ export function initializeGraphWebview(): void {
   };
   const hideTooltip = () => {
     tooltip.hidden = true;
+    tooltipNodeId = undefined;
+    tooltipPosition = undefined;
     renderer.hoverNode();
   };
 
   cy.on('mouseover', 'node', event => {
     const node = event.target.data() as GraphNode;
+    tooltipNodeId = node.id;
+    tooltipPosition = { ...event.renderedPosition };
+    refreshTooltipCount();
     renderer.hoverNode(node.id);
     tooltipName.textContent = node.label;
     tooltipFile.textContent = fileName(node.file);
@@ -492,6 +574,7 @@ export function initializeGraphWebview(): void {
   });
   cy.on('mousemove', 'node', event => {
     if (!tooltip.hidden) {
+      tooltipPosition = { ...event.renderedPosition };
       moveTooltip(event.renderedPosition.x, event.renderedPosition.y);
     }
   });
@@ -552,6 +635,9 @@ export function initializeGraphWebview(): void {
         break;
       case 'debugClear':
         renderer.clearDebugPath();
+        break;
+      case 'hotCounts':
+        renderer.setHotCounts(message.counts);
         break;
     }
   });

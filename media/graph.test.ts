@@ -2,7 +2,8 @@ import * as assert from 'node:assert/strict';
 import cytoscape, { type Core } from 'cytoscape';
 import { advanceAnimationFrames, pendingAnimationFrames } from './animationFrames.test';
 import { GraphRenderer, graphStyles } from './graph';
-import type { GraphData } from '../src/types';
+import { heatColor, heatPalette, type HeatRange } from './heatmap';
+import type { GraphData, HotCounts } from '../src/types';
 import { largeSearchGraph } from '../src/test/mockdata';
 
 const fixture: GraphData = {
@@ -14,6 +15,152 @@ const fixture: GraphData = {
 const edge = (cy: Core, from: string, to: string) => cy.edges().filter(e => e.source().id() === from && e.target().id() === to);
 
 const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void>][] = [
+  ['heat uses actual count distances on a continuous blue-to-red scale, including equal counts', (cy, renderer) => {
+    renderer.setHotCounts({ root: 1, a: 2, b: 500, t: 1000, other: 2, unknown: 1000000 });
+    assert.deepEqual(renderer.heatRange, { min: 1, max: 1000 });
+    assert.equal(cy.$id('root').data('heatPosition'), 0);
+    assert.equal(cy.$id('a').data('heatPosition'), 1 / 999);
+    assert.equal(cy.$id('b').data('heatPosition'), 499 / 999);
+    assert.equal(cy.$id('t').data('heatPosition'), 1);
+    assert.equal(cy.$id('a').style('background-color'), cy.$id('other').style('background-color'));
+    assert.equal(cy.$id('root').style('background-color'), 'rgb(36,80,139)');
+    assert.equal(cy.$id('t').style('background-color'), 'rgb(139,48,48)');
+    assert.notEqual(cy.$id('b').style('background-color'), cy.$id('root').style('background-color'));
+    assert.notEqual(cy.$id('b').style('background-color'), cy.$id('t').style('background-color'));
+    renderer.setHotCounts({ root: 1, a: 2, t: 3 });
+    assert.equal(cy.$id('a').data('heatPosition'), 0.5);
+    assert.equal(cy.$id('a').style('background-color'), heatColor(0.5, heatPalette('#d4d4d4')));
+  }],
+  ['heat snapshots replace totals, rescale all nodes, and reset to their original fills', (cy, renderer) => {
+    const normal = cy.$id('b').style('background-color');
+    renderer.setHotCounts({ root: 1, a: 2, t: 3 });
+    renderer.setHotCounts({ root: 1, a: 2, t: 1000 });
+    assert.equal(renderer.getHotCount('a'), 2);
+    assert.equal(cy.$id('a').data('heatPosition'), 1 / 999);
+    assert.equal(cy.$id('b').style('background-color'), normal);
+    renderer.setHotCounts({ root: 7, a: 7 });
+    assert.deepEqual(renderer.heatRange, { min: 7, max: 7 });
+    assert.equal(cy.$id('root').data('heatPosition'), 0.5);
+    assert.equal(cy.$id('t').style('background-color'), normal);
+    assert.equal(renderer.getHotCount('t'), undefined);
+    renderer.setHotCounts({});
+    assert.equal(renderer.heatRange, undefined);
+    assert.equal(cy.$('.heat-counted').length, 0);
+    for (const node of cy.nodes()) {
+      assert.equal(node.style('background-color'), normal);
+      assert.equal(node.data('heatPosition'), undefined);
+    }
+  }],
+  ['heat ignores invalid counts and resolves exact IDs with path punctuation and line suffixes', (cy, renderer) => {
+    const ids = ['c:/my project/a.py::Dog.speak@12', '/tmp/b.py::outer.inner'];
+    renderer.renderGraph({ nodes: ids.map(id => ({ id, label: 'same', file: 'a.py', line: 1, endLine: 2 })), edges: [] });
+    renderer.setHotCounts({ [ids[0]]: 1, [ids[1]]: 1000, unknown: 999999 });
+    assert.deepEqual(renderer.heatRange, { min: 1, max: 1000 });
+    assert.equal(cy.getElementById(ids[0]).data('heatPosition'), 0);
+    assert.equal(cy.getElementById(ids[1]).data('heatPosition'), 1);
+    for (const invalid of [0, -1, NaN, Infinity, 0.5, '2' as unknown as number]) {
+      renderer.setHotCounts({ [ids[0]]: invalid });
+      assert.equal(cy.$('.heat-counted').length, 0);
+      assert.equal(renderer.heatRange, undefined);
+    }
+  }],
+  ['heat replays counts received before a graph and recalculates the scale for replacement graphs', (cy, renderer) => {
+    renderer.renderGraph({ nodes: [], edges: [] });
+    renderer.setHotCounts({ root: 1, a: 2, t: 1000 });
+    assert.equal(renderer.heatRange, undefined);
+    renderer.renderGraph(fixture);
+    assert.equal(cy.$id('a').data('heatPosition'), 1 / 999);
+    renderer.renderGraph({ nodes: fixture.nodes.filter(node => node.id !== 't'), edges: [] });
+    assert.deepEqual(renderer.heatRange, { min: 1, max: 2 });
+    assert.equal(cy.$id('a').data('heatPosition'), 1);
+    renderer.setHotCounts({});
+    renderer.renderGraph(fixture);
+    assert.equal(cy.$('.heat-counted').length, 0);
+  }],
+  ['heat updates and resets preserve every existing visual cue, search state, node, and viewport', (cy, renderer) => {
+    renderer.highlightPath(['root', 'a', 't']);
+    cy.$id('a').select();
+    renderer.hoverNode('a');
+    renderer.search.find('other');
+    cy.zoom(1.2); cy.pan({ x: 51, y: 32 });
+    const elements = cy.elements().toArray();
+    const properties = ['border-color', 'border-width', 'border-style', 'underlay-color', 'underlay-opacity',
+      'overlay-color', 'overlay-opacity', 'opacity', 'line-color', 'target-arrow-color', 'width', 'line-style', 'label'];
+    const appearance = () => cy.elements().map(element => ({
+      id: element.id(), classes: element.classes().filter(name => name !== 'heat-counted'), selected: element.selected(),
+      style: Object.fromEntries(properties.map(property => [property, element.style(property)])),
+    }));
+    const before = appearance();
+    const positions = cy.nodes().map(node => ({ id: node.id(), ...node.position() }));
+    const pan = { ...cy.pan() }; const zoom = cy.zoom();
+    const events: string[] = [];
+    cy.on('layoutstart add remove position', event => events.push(event.type));
+    const snapshots: HotCounts[] = [{ root: 1, a: 2, t: 1000, other: 20 }, {}];
+    for (const counts of snapshots) {
+      renderer.setHotCounts(counts);
+      assert.deepEqual(appearance(), before);
+      assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+      assert.deepEqual(cy.pan(), pan); assert.equal(cy.zoom(), zoom);
+      cy.elements().forEach((element, index) => assert.equal(element, elements[index]));
+    }
+    assert.deepEqual(events, []);
+  }],
+  ['runtime clearing retains final heat and layout switches do not change count colors', (cy, renderer) => {
+    renderer.setHotCounts({ root: 1, a: 2, t: 1000 });
+    const colors = () => cy.nodes().map(node => node.style('background-color'));
+    const before = colors();
+    renderer.highlightPath(['root', 'a', 't']); renderer.hoverNode('t');
+    assert.deepEqual(colors(), before);
+    renderer.clearDebugPath();
+    assert.deepEqual(colors(), before);
+    assert.equal(cy.$('.path, .current, .dimmed').length, 0);
+    assert.equal(renderer.getHotCount('t'), 1000);
+    renderer.setLayoutMode('explore');
+    const frames = pendingAnimationFrames();
+    let layouts = 0;
+    cy.on('layoutstart layoutstop', () => layouts++);
+    renderer.setHotCounts({ root: 1, a: 2, t: 1000 });
+    assert.equal(layouts, 0);
+    assert.equal(pendingAnimationFrames(), frames);
+    renderer.setLayoutMode('trace');
+    assert.deepEqual(colors(), before);
+  }],
+  ['legend callbacks track visible ranges, including reset, equal counts, and empty graphs', (cy) => {
+    const ranges: (HeatRange | undefined)[] = [];
+    const renderer = new GraphRenderer(cy, undefined, undefined, undefined, range => ranges.push(range));
+    try {
+      renderer.renderGraph(fixture);
+      renderer.setHotCounts({ a: 10, t: 30 });
+      renderer.setHotCounts({ t: 4 });
+      renderer.setHotCounts({});
+      renderer.renderGraph({ nodes: [], edges: [] });
+      assert.deepEqual(ranges, [undefined, { min: 10, max: 30 }, { min: 4, max: 4 }, undefined, undefined]);
+    } finally { renderer.dispose(); }
+  }],
+  ['heat fills match the legend palette and keep theme labels readable in light and dark themes', (cy, renderer) => {
+    const luminance = (rgb: number[]) => rgb.map(value => {
+      const channel = value / 255;
+      return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    }).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+    for (const [foreground, background, textRGB] of [
+      ['#d4d4d4', '#252526', [212, 212, 212]], ['#333333', '#ffffff', [51, 51, 51]],
+    ] as const) {
+      cy.style(graphStyles(foreground, background));
+      renderer.setHotCounts({ root: 1, a: 501, t: 1001 });
+      const palette = heatPalette(foreground);
+      for (let step = 0; step <= 100; step++) {
+        const rgb = heatColor(step / 100, palette).match(/\d+/g)!.map(Number);
+        const text = luminance([...textRGB]); const fill = luminance(rgb);
+        assert.ok((Math.max(text, fill) + 0.05) / (Math.min(text, fill) + 0.05) >= 4.5);
+      }
+      for (const [id, position] of [['root', 0], ['a', 0.5], ['t', 1]] as const) {
+        assert.equal(cy.$id(id).style('background-color'), heatColor(position, palette));
+        assert.equal(cy.$id(id).style('color'), `rgb(${textRGB.join(',')})`);
+      }
+      renderer.setHotCounts({});
+      assert.equal(cy.$id('root').style('background-color'), background === '#ffffff' ? 'rgb(255,255,255)' : 'rgb(37,37,38)');
+    }
+  }],
   ['search ranks exact names before partial names, ignores case, and cycles distinct duplicate IDs both ways', (cy, renderer) => {
     const ids = ['C:/one.py::summary', 'C:/two.py::sum', 'C:/three.py::sum', 'C:/four.py::Consumer.sum'];
     renderer.renderGraph({

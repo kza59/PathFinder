@@ -30,9 +30,28 @@ export function sendHighlight(path: string[]): void {
  * live call path whenever VS Code fetches the stack after the debugger pauses.
  */
 export function registerDebugTracker(context: vscode.ExtensionContext): void {
+  const trackedSessions = new Set<string>();
+  let highlightedSessionId: string | undefined;
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterTrackerFactory('*', {
-      createDebugAdapterTracker: () => createTracker(() => PathFindPanel.currentPanel?.currentGraph),
+      createDebugAdapterTracker: session => {
+        trackedSessions.add(session.id);
+        const getGraph = () => PathFindPanel.currentPanel?.currentGraph;
+        return createTracker(getGraph, frames => {
+          // Responses can arrive while a session is shutting down.
+          if (!trackedSessions.has(session.id)) return;
+          highlightedSessionId = session.id;
+          sendHighlight(resolveDebugPath(frames, getGraph()));
+        });
+      },
+    }),
+    vscode.debug.onDidTerminateDebugSession(session => {
+      trackedSessions.delete(session.id);
+      // Ending an unrelated session must not clear another session's live path.
+      if (highlightedSessionId === session.id) {
+        highlightedSessionId = undefined;
+        PathFindPanel.currentPanel?.clearDebugPath();
+      }
     }),
   );
 }

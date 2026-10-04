@@ -298,6 +298,36 @@ footer {
 #legend .swatch.edge.outgoing { --pf-edge: var(--pf-hover-out); height: 4px; }
 /* --- end legend feature --- */
 
+/* --- heatmap feature --- */
+#heat-legend {
+  max-width: 270px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-panel-border, #454545);
+}
+
+#heat-legend[hidden] { display: none; }
+
+#heat-scale {
+  height: 14px;
+  margin-top: 6px;
+  border: 1px solid var(--pf-node-border);
+  border-radius: 3px;
+}
+
+#heat-legend .heat-range {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+#heat-legend p {
+  margin: 5px 0 0;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+/* --- end heatmap feature --- */
+
 /* --- breadcrumb feature --- */
 #breadcrumb {
   flex: 1 0 100%;
