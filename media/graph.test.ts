@@ -10,6 +10,7 @@ import { DEBUG_CASES } from '../src/test/debugCases';
 import { markRecursion } from '../src/recursion';
 import { recursionAnnouncement, recursionColor, recursionOutlines } from './recursion';
 import { truncationMarkerCases } from './truncationMarkers.test';
+import { exploreLayoutCases } from './exploreLayout.test';
 
 const fixture: GraphData = {
   targetIds: ['t'],
@@ -26,6 +27,7 @@ const noiseFixture: GraphData = {
 
 const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void>][] = [
   ...truncationMarkerCases,
+  ...exploreLayoutCases,
   ...['test5/python', 'test5/c'].map(fixtureName => [
     `${fixtureName}: direct, mutual and three-function recursion display and live depth`,
     (cy: Core, renderer: GraphRenderer) => {
@@ -783,12 +785,11 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     const root = cy.$id('root');
     root.emit('grab');
     root.position({ x: 999, y: -123 });
-    // Simulate Cytoscape holding the grabbed node while Cola moves its neighbors.
-    root.lock();
+    // The grab event alone holds the node while Explore moves its neighbors.
     advanceAnimationFrames(20);
     assert.notDeepEqual(neighbor.position(), before);
     assert.deepEqual(root.position(), { x: 999, y: -123 });
-    root.unlock(); root.emit('free');
+    root.emit('free');
     advanceAnimationFrames(10);
     renderer.dispose();
     const positions = cy.nodes().map(node => ({ id: node.id(), ...node.position() }));

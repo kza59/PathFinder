@@ -100,3 +100,11 @@ to reach `level20` and `main`; the truncation markers disappear. **Show Noise**
 changes the second count to **+6**, including the top-level module node. Counts
 exclude functions already in the graph and may be **+0** if the graph's node cap
 prevents adding functions. Clicking a function still opens its source.
+
+In **Explore**, each node's weight is its number of incoming and outgoing graph
+edges, with a minimum of 1. Self calls and multiple call sites on the same edge
+do not add weight. Nodes with more connections move less when pulled by lighter
+neighbors; dragging a hub moves more of its connected branches. Every node still
+follows your cursor when dragged. Nearby nodes also adjust to keep their boxes
+and labels apart. **Show Noise** keeps weights consistent while hidden nodes
+exert no layout forces. Switching back to **Trace** restores the saved positions.

@@ -1,5 +1,5 @@
-import cytoscape, { type Core, type ElementDefinition, type Layouts, type NodeSingular, type StylesheetJson } from 'cytoscape';
-import cola from 'cytoscape-cola';
+import cytoscape, { type Core, type ElementDefinition, type NodeSingular, type StylesheetJson } from 'cytoscape';
+import { ExploreLayout } from './exploreLayout';
 import { GraphSearch, type SearchState } from './graphSearch';
 import { TruncationMarkers } from './truncationMarkers';
 import { heatColor, heatPalette, heatPosition, type HeatRange } from './heatmap';
@@ -10,8 +10,6 @@ import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } f
 import type { CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, WebviewMessage } from '../src/types';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
-
-cytoscape.use(cola);
 
 type LayoutMode = 'trace' | 'explore';
 
@@ -196,7 +194,7 @@ export class GraphRenderer {
   private hoveredId: string | undefined;
   private showNoise = false;
   private mode: LayoutMode = 'trace';
-  private exploreLayout?: Layouts;
+  private exploreLayout?: ExploreLayout;
   private staticPositions = new Map<string, { x: number; y: number }>();
   public layout: TargetLayout | undefined;
   public readonly search: GraphSearch;
@@ -301,22 +299,7 @@ export class GraphRenderer {
   }
 
   private startExploreLayout(): void {
-    const options = {
-      name: 'cola',
-      animate: true,
-      refresh: 1,
-      randomize: false,
-      avoidOverlap: true,
-      nodeDimensionsIncludeLabels: true,
-      nodeSpacing: () => 30,
-      edgeLength: () => 100,
-      ungrabifyWhileSimulating: false,
-      fit: false,
-      centerGraph: false,
-      infinite: true,
-    };
-    this.exploreLayout = this.cy.layout(options);
-    this.exploreLayout.run();
+    this.exploreLayout = new ExploreLayout(this.cy);
   }
 
   private stopExploreLayout(): void {

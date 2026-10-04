@@ -1,4 +1,4 @@
-// Cola needs a browser animation scheduler; advance it explicitly in headless tests.
+// Explore needs a browser animation scheduler; advance it explicitly in headless tests.
 let frames: FrameRequestCallback[] = [];
 Object.defineProperty(globalThis, 'window', {
   value: {

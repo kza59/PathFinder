@@ -103,6 +103,7 @@
     "test:renderer": "tsc -p tsconfig.webview.json && esbuild media/graph.test.ts --bundle --platform=node --outfile=out/test/graphRenderer.unit.js && node out/test/graphRenderer.unit.js"
   },
   "devDependencies": {
+    "@types/d3-force": "^3.0.0",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "@vscode/test-electron": "^2.5.2",
@@ -113,7 +114,7 @@
     "@anthropic-ai/sdk": "^0.131.0",
     "@google/genai": "^2.27.0",
     "cytoscape": "^3.34.3",
-    "cytoscape-cola": "^2.5.1",
+    "d3-force": "^3.0.0",
     "openai": "^6.49.0"
   }
 }
