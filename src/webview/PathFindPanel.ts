@@ -74,6 +74,14 @@ export class PathFindPanel implements vscode.Disposable {
           this.nodeClicked.fire({
             type: 'nodeClicked', id: message.id, file: message.file, line: message.line,
           });
+        // --- copy path feature ---
+        } else if (message.type === 'copyPath' && 'text' in message && typeof message.text === 'string' && message.text) {
+          const text = message.text;
+          void vscode.env.clipboard.writeText(text).then(
+            () => vscode.window.showInformationMessage('Path copied to clipboard'),
+            error => vscode.window.showErrorMessage(`PathFind: could not copy path (${error instanceof Error ? error.message : String(error)})`),
+          );
+        // --- end copy path feature ---
         }
       }),
     );
@@ -181,6 +189,9 @@ export class PathFindPanel implements vscode.Disposable {
     <!-- --- breadcrumb feature --- -->
     <nav id="breadcrumb" aria-label="Current call path" hidden></nav>
     <!-- --- end breadcrumb feature --- -->
+    <!-- --- copy path feature --- enabled by media/graph.ts while the breadcrumb shows a path -->
+    <button id="copy-path" type="button" title="Copy the current call path as text" disabled>Copy path</button>
+    <!-- --- end copy path feature --- -->
     <span id="runtime" role="status" aria-live="polite">No runtime path</span>
     <span id="selection">Click a function to see its source location</span>
   </footer>
