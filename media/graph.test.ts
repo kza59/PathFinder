@@ -11,6 +11,7 @@ import { markRecursion } from '../src/recursion';
 import { recursionAnnouncement, recursionColor, recursionOutlines } from './recursion';
 import { truncationMarkerCases } from './truncationMarkers.test';
 import { exploreLayoutCases } from './exploreLayout.test';
+import { sessionReplayCases } from './sessionReplay.test';
 
 const fixture: GraphData = {
   targetIds: ['t'],
@@ -28,6 +29,7 @@ const noiseFixture: GraphData = {
 const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void>][] = [
   ...truncationMarkerCases,
   ...exploreLayoutCases,
+  ...sessionReplayCases,
   ...['test5/python', 'test5/c'].map(fixtureName => [
     `${fixtureName}: direct, mutual and three-function recursion display and live depth`,
     (cy: Core, renderer: GraphRenderer) => {

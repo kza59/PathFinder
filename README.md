@@ -61,6 +61,15 @@ to its static view while retaining the final heatmap counts and the current
 layout and viewport. Ending an unrelated debug session preserves the displayed
 session's path.
 
+Once debugging ends, **Replay** becomes available if any pauses were recorded.
+Click it to highlight every recorded pause in order, keeping each path visible
+for 500 ms before moving directly to the next. The history slider and label
+follow playback, including pauses with the same call path. Playback restores
+the previous view when it finishes; clicking Replay again restarts it, and
+manually scrubbing stops it at the chosen pause.
+History is kept in memory for the latest session (up to 5,000 pauses and 100
+frames per pause); starting a new session replaces it.
+
 Recursive functions have matching colored outlines and a shared enclosure for each
 group. Calls within a recursive group are dashed, including self calls. Recursion
 legend entries appear only when those structures are visible. During debugging or

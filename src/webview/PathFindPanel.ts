@@ -348,8 +348,8 @@ export class PathFindPanel implements vscode.Disposable {
     <!-- --- copy path feature --- enabled by media/graph.ts while the breadcrumb shows a path -->
     <button id="copy-path" type="button" title="Copy the current call path as text" disabled>Copy path</button>
     <!-- --- end copy path feature --- -->
-    <!-- --- replay feature --- enabled by media/graph.ts while the breadcrumb shows a path -->
-    <button id="replay-path" type="button" title="Replay the call path, outer caller to current function" disabled>Replay</button>
+    <!-- --- replay feature --- enabled for a live path or a completed session's recorded pauses -->
+    <button id="replay-path" type="button" title="Replay all recorded debugging steps" disabled>Replay</button>
     <!-- --- end replay feature --- -->
     <!-- --- session history --- shown by media/graph.ts once a debug session has been recorded -->
     <div id="history" role="group" aria-label="Debug session history" hidden>
