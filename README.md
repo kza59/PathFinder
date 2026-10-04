@@ -60,3 +60,16 @@ the live path, current-function marker, and runtime dimming. The graph returns
 to its static view while retaining the final heatmap counts and the current
 layout and viewport. Ending an unrelated debug session preserves the displayed
 session's path.
+
+Chokepoints have a small ◇ beside their function name. **Where to break** focuses
+a chokepoint at a readable zoom, starting closest to the target. Use the search
+bar's result counter and previous/next arrows (or Enter / Shift+Enter in the
+search field) to cycle through all visible chokepoints. Typing a function name
+returns to normal search. The button is disabled when no visible chokepoints exist.
+
+To check **Chokepoint Marker** and **Where to Break**, open `test8/chain.py` and
+run **PathFind** on `target`. The intermediate chain functions should have ◇
+markers; `target` and the top entry should retain their usual styles. Click
+**Where to break** from a zoomed-out view, cycle both ways, and repeat after
+expanding callers. Also check Trace / Explore, light / dark themes, and a graph
+with no chokepoints.

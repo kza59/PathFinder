@@ -19,7 +19,7 @@ export const layoutOptions = {
 };
 
 const nodeLabel = (node: NodeSingular): string => [
-  node.data('label'),
+  `${node.hasClass('chokepoint') ? '◇ ' : ''}${node.data('label')}`,
   ...(node.data('callArgs') ? [node.data('callArgs') as string] : []), // call values feature
   ...(node.hasClass('target') ? ['Target'] : []),
   ...(node.hasClass('current') ? ['You are here'] : []),
@@ -229,6 +229,10 @@ export class GraphRenderer {
     return this.cy.nodes(':visible').length;
   }
 
+  public get visibleChokepointCount(): number {
+    return this.cy.nodes(':visible').filter(node => node.data('chokepoint') === true).length;
+  }
+
   public setShowNoise(show: boolean): void {
     if (this.showNoise === show) return;
     this.showNoise = show;
@@ -318,7 +322,8 @@ export class GraphRenderer {
     const elements: ElementDefinition[] = graph.nodes.map(node => ({
       group: 'nodes',
       data: { ...node, distance: layout.distances.get(node.id) },
-      classes: layout.targetIds.has(node.id) ? 'target' : '',
+      classes: [layout.targetIds.has(node.id) ? 'target' : '', node.chokepoint === true ? 'chokepoint' : '']
+        .filter(Boolean).join(' '),
       position: layout.positions.get(node.id),
       locked: layout.pinnedIds.has(node.id),
     }));
@@ -461,7 +466,9 @@ export function initializeGraphWebview(): void {
   const searchStatus = document.getElementById('search-status')!;
   const searchPrevious = document.getElementById('search-previous') as HTMLButtonElement;
   const searchNext = document.getElementById('search-next') as HTMLButtonElement;
+  const searchSubmit = document.getElementById('search-submit') as HTMLButtonElement;
   const showNoise = document.getElementById('show-noise') as HTMLInputElement;
+  const whereToBreak = document.getElementById('where-to-break') as HTMLButtonElement;
   const theme = getComputedStyle(document.body);
   const foreground = theme.getPropertyValue('--vscode-editor-foreground').trim() || '#d4d4d4';
   const palette = heatPalette(foreground);
@@ -489,8 +496,15 @@ export function initializeGraphWebview(): void {
       ? 'Noise functions are hidden. Enable Show Noise to display them.'
       : 'No functions in this graph';
   };
+  const updateChokepoints = () => {
+    whereToBreak.disabled = renderer.visibleChokepointCount === 0;
+    whereToBreak.title = whereToBreak.disabled
+      ? 'No visible chokepoints in this graph'
+      : 'Focus a chokepoint; use the search arrows to visit each suggested breakpoint location';
+  };
   const renderer = new GraphRenderer(cy, count => {
     updateEmpty(count);
+    updateChokepoints();
     selection.textContent = 'Click a function to see its source location';
     searchInput.value = '';
     renderLayoutLabels();
@@ -499,13 +513,20 @@ export function initializeGraphWebview(): void {
       ? `You are here: ${current.label} · ${fileName(current.file)}:${current.line}`
       : active ? 'Current function is outside this graph' : 'No runtime path';
   }, state => {
+    const chokepoints = state.kind === 'chokepoints';
+    searchInput.placeholder = chokepoints ? 'Chokepoints — type to search' : 'Find function';
     searchCount.textContent = state.count ? `${state.index + 1} of ${state.count}` : 'No results';
-    searchCount.hidden = !state.query;
+    searchCount.hidden = !chokepoints && !state.query;
     searchPrevious.disabled = searchNext.disabled = state.count === 0;
+    searchPrevious.setAttribute('aria-label', chokepoints ? 'Previous chokepoint' : 'Previous match');
+    searchNext.setAttribute('aria-label', chokepoints ? 'Next chokepoint' : 'Next match');
+    searchPrevious.title = `${chokepoints ? 'Previous chokepoint' : 'Previous match'} (Shift+Enter)`;
+    searchNext.title = `${chokepoints ? 'Next chokepoint' : 'Next match'} (Enter)`;
+    searchSubmit.title = chokepoints ? 'Next chokepoint (Enter)' : 'Search / next match (Enter)';
     searchInput.setAttribute('aria-invalid', String(!!state.query && state.count === 0));
     searchStatus.textContent = state.node
-      ? `${state.node.label} — ${fileName(state.node.file)}:${state.node.line}`
-      : state.query ? 'No matching functions' : 'Enter a function name';
+      ? `${chokepoints ? `Chokepoint ${state.index + 1} of ${state.count}: ` : ''}${state.node.label} — ${fileName(state.node.file)}:${state.node.line}`
+      : chokepoints ? 'No visible chokepoints in this graph' : state.query ? 'No matching functions' : 'Enter a function name';
     searchStatus.title = state.node ? `${state.node.file}:${state.node.line}` : '';
   }, range => {
     heatLegend.hidden = !range;
@@ -524,7 +545,12 @@ export function initializeGraphWebview(): void {
         : 'Linear scale for this graph; colors rescale as counts change.';
     }
     if (tooltipNodeId !== undefined) refreshTooltipCount();
-  }, updateEmpty);
+  }, count => { updateEmpty(count); updateChokepoints(); });
+
+  whereToBreak.addEventListener('click', () => {
+    searchInput.value = '';
+    renderer.search.findChokepoints();
+  });
 
   searchInput.addEventListener('input', () => renderer.search.find(searchInput.value));
   document.getElementById('search-form')!.addEventListener('submit', event => {
@@ -587,6 +613,7 @@ export function initializeGraphWebview(): void {
   tooltipLines.className = 'tooltip-lines';
   const tooltipConnections = tooltip.appendChild(document.createElement('div'));
   const tooltipDistance = tooltip.appendChild(document.createElement('div'));
+  const tooltipChokepoint = tooltip.appendChild(document.createElement('div'));
   const tooltipCalls = tooltip.appendChild(document.createElement('div'));
   // --- call values feature ---
   const tooltipArgs = tooltip.appendChild(document.createElement('div'));
@@ -665,6 +692,8 @@ export function initializeGraphWebview(): void {
     refreshTooltipCount();
     renderer.hoverNode(node.id);
     tooltipName.textContent = node.label;
+    tooltipChokepoint.hidden = node.chokepoint !== true;
+    tooltipChokepoint.textContent = 'Chokepoint: every analyzed path to the target passes through this function.';
     tooltipFile.textContent = fileName(node.file);
     tooltipLines.textContent = node.endLine > node.line
       ? `lines ${node.line}–${node.endLine}`

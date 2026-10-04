@@ -309,6 +309,12 @@ footer {
 
 #legend .swatch.node.target { border-color: var(--pf-target); border-width: 3px; }
 
+#legend .swatch.chokepoint {
+  height: auto;
+  text-align: center;
+  font-size: 14px;
+}
+
 #legend .swatch.node.current {
   border: 5px double var(--pf-current);
 }

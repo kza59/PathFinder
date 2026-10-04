@@ -16,7 +16,7 @@ export interface GraphNode {
   recursionGroup?: number; // set on nodes in a recursive structure; members of the same cycle share the number
   hiddenCallers?: number;  // callers that exist but were left out (depth or node limit reached); the graph is cut off here
   noise?: boolean;         // usually uninteresting: top-level <module> code, constructors/destructors, tests
-  chokepoint?: true;       // every path to the target passes through here: one breakpoint here catches them all
+  chokepoint?: boolean;    // every path to the target passes through here: one breakpoint here catches them all
 }
 
 export interface GraphEdge {

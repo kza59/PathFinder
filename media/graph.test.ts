@@ -21,6 +21,150 @@ const noiseFixture: GraphData = {
 };
 
 const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void>][] = [
+  ['chokepoint markers require true and compose with target, debug, heat and argument styles', (cy, renderer) => {
+    const graph: GraphData = {
+      ...fixture,
+      nodes: fixture.nodes.map(node => ({ ...node, ...(['a', 't'].includes(node.id)
+        ? { chokepoint: true } : node.id === 'b' ? { chokepoint: false } : {}) })),
+    };
+    renderer.renderGraph(graph);
+    assert.equal(renderer.visibleChokepointCount, 2);
+    assert.equal(cy.$id('a').style('label'), '◇ a');
+    assert.equal(cy.$id('t').style('label'), '◇ t\nTarget');
+    for (const id of ['root', 'b', 'other']) {
+      assert.equal(cy.$id(id).hasClass('chokepoint'), false);
+      assert.equal(cy.$id(id).style('label'), id);
+    }
+    renderer.highlightPath(['root', 'a', 't']);
+    renderer.setHotCounts({ a: 10, t: 100 });
+    renderer.setCallValues({ t: { line: '(x=3)', args: [{ name: 'x', value: '3' }], atEntry: true } });
+    const appearance = () => ['a', 't'].map(id => ({
+      border: cy.$id(id).style('border-color'), width: cy.$id(id).style('border-width'),
+      fill: cy.$id(id).style('background-color'), underlay: cy.$id(id).style('underlay-color'),
+    }));
+    const before = appearance();
+    assert.equal(cy.$id('t').style('label'), '◇ t\n(x=3)\nTarget\nYou are here');
+    renderer.renderGraph({ ...graph, nodes: graph.nodes.map(node => ({ ...node, chokepoint: false })) });
+    assert.deepEqual(appearance(), before);
+    assert.equal(cy.$id('t').style('label'), 't\n(x=3)\nTarget\nYou are here');
+    assert.equal(renderer.visibleChokepointCount, 0);
+  }],
+  ...CASES.test8.map((expected, index) => [
+    `test8: chokepoint markers and search cycling at expansion stage ${index + 1}`,
+    (cy: Core, renderer: GraphRenderer) => {
+      cy.width = () => 1000;
+      cy.height = () => 600;
+      const graph: GraphData = {
+        targetIds: ['chain.py::target'],
+        nodes: [...expected.nodes].reverse().map(id => ({
+          id, label: id.split('::')[1], file: id.split('::')[0], line: 1, endLine: 2,
+          chokepoint: expected.chokepoints?.includes(id),
+          noise: id.endsWith('::<module>'),
+        })),
+        edges: expected.edges.map(([from, to, lines]) => ({ from, to, lines })),
+      };
+      renderer.renderGraph(graph);
+      assert.deepEqual(cy.nodes('.chokepoint').map(node => node.id()).sort(), [...expected.chokepoints!].sort());
+      cy.zoom(0.1); cy.pan({ x: 9000, y: 9000 });
+      const nodes = cy.nodes().toArray();
+      const positions = nodes.map(node => ({ id: node.id(), ...node.position() }));
+      const events: string[] = [];
+      cy.on('layoutstart add remove position', event => events.push(event.type));
+      const first = renderer.search.findChokepoints();
+      assert.equal(first.kind, 'chokepoints');
+      assert.equal(first.query, '');
+      assert.equal(first.index, 0);
+      assert.equal(first.count, expected.chokepoints!.length);
+      assert.equal(first.node?.id, 'chain.py::level1');
+      assert.equal(cy.zoom(), 1);
+      for (const id of expected.chokepoints!.slice(1)) assert.equal(renderer.search.move(1).node?.id, id);
+      assert.equal(renderer.search.move(1).node?.id, 'chain.py::level1');
+      assert.equal(renderer.search.move(-1).node?.id, expected.chokepoints!.at(-1));
+      assert.equal(renderer.search.findChokepoints().node?.id, 'chain.py::level1');
+      const focused = cy.$id('chain.py::level1');
+      assert.equal(focused.hasClass('search-hit'), true);
+      assert.ok(Math.abs(focused.renderedPosition().x - 500) < 0.001);
+      assert.ok(Math.abs(focused.renderedPosition().y - 300) < 0.001);
+      assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+      cy.nodes().forEach((node, i) => assert.equal(node, nodes[i]));
+      assert.deepEqual(events, []);
+    },
+  ] as [string, (cy: Core, renderer: GraphRenderer) => void]),
+  ['chokepoint results refresh with noise visibility and return to function search or clear safely', (cy, renderer) => {
+    cy.width = () => 1000;
+    cy.height = () => 600;
+    renderer.renderGraph({
+      ...noiseFixture,
+      nodes: noiseFixture.nodes.map(node => ({ ...node, chokepoint: ['a', 'b'].includes(node.id) })),
+    });
+    assert.equal(renderer.visibleChokepointCount, 1);
+    assert.equal(renderer.search.findChokepoints().node?.id, 'b');
+    const pan = { ...cy.pan() }; const zoom = cy.zoom();
+    renderer.setShowNoise(true);
+    assert.equal(renderer.visibleChokepointCount, 2);
+    const refreshed = renderer.search.refresh();
+    assert.equal(refreshed.kind, 'chokepoints');
+    assert.equal(refreshed.count, 2);
+    assert.equal(refreshed.node?.id, 'b');
+    assert.deepEqual(cy.pan(), pan); assert.equal(cy.zoom(), zoom);
+    assert.equal(renderer.search.move(1).node?.id, 'a');
+    renderer.setShowNoise(false);
+    assert.equal(cy.$id('a').hasClass('search-hit'), false);
+    assert.equal(renderer.search.move(1).node?.id, 'b');
+    const normal = renderer.search.find('root');
+    assert.equal(normal.kind, 'functions');
+    assert.equal(normal.query, 'root');
+    assert.equal(normal.node?.id, 'root');
+    assert.equal(renderer.search.findChokepoints().node?.id, 'b');
+    assert.equal(renderer.search.clear().kind, 'functions');
+    assert.equal(renderer.search.move(1).count, 0);
+    renderer.search.findChokepoints();
+    renderer.renderGraph(fixture);
+    assert.equal(renderer.search.move(1).kind, 'functions');
+    assert.equal(renderer.search.move(1).count, 0);
+    assert.equal(cy.$('.search-hit').length, 0);
+  }],
+  ['no chokepoints and empty graphs leave the viewport and debug appearance unchanged', (cy, renderer) => {
+    renderer.highlightPath(['root', 'a', 't']);
+    for (const graph of [fixture, { nodes: [], edges: [] }]) {
+      renderer.renderGraph(graph);
+      cy.zoom(1.2); cy.pan({ x: 51, y: 32 });
+      const before = cy.elements().map(node => ({ id: node.id(), classes: node.classes() }));
+      const state = renderer.search.findChokepoints();
+      assert.equal(state.kind, 'chokepoints');
+      assert.equal(state.count, 0);
+      assert.equal(state.index, -1);
+      assert.equal(state.node, undefined);
+      renderer.search.move(1); renderer.search.move(-1);
+      assert.deepEqual(cy.pan(), { x: 51, y: 32 });
+      assert.equal(cy.zoom(), 1.2);
+      assert.deepEqual(cy.elements().map(node => ({ id: node.id(), classes: node.classes() })), before);
+    }
+  }],
+  ['chokepoint zoom fits small viewports, respects zoom limits and keeps Explore running', (cy, renderer) => {
+    cy.width = () => 200;
+    cy.height = () => 160;
+    renderer.renderGraph({ ...fixture, nodes: fixture.nodes.map(node => ({ ...node, chokepoint: node.id === 'a' })) });
+    cy.minZoom(0.05); cy.maxZoom(0.5);
+    renderer.setLayoutMode('explore');
+    advanceAnimationFrames(10);
+    const positions = cy.nodes().map(node => ({ id: node.id(), ...node.position() }));
+    const frames = pendingAnimationFrames();
+    const events: string[] = [];
+    cy.on('layoutstart layoutstop add remove position', event => events.push(event.type));
+    renderer.search.findChokepoints();
+    assert.equal(cy.zoom(), 0.5);
+    assert.equal(renderer.layoutMode, 'explore');
+    assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+    assert.equal(pendingAnimationFrames(), frames);
+    assert.ok(frames > 0);
+    assert.deepEqual(events, []);
+    const box = cy.$id('a').renderedBoundingBox({ includeOverlays: false, includeUnderlays: false });
+    assert.ok(box.x1 >= 0 && box.x2 <= cy.width() && box.y1 >= 0 && box.y2 <= cy.height());
+    cy.minZoom(0.4); cy.width = () => 100;
+    renderer.search.move(1);
+    assert.equal(cy.zoom(), 0.4);
+  }],
   ...['test7/python', 'test7/cpp'].map(folder => [
     `${folder}: noise starts hidden and the toggle restores all tagged nodes and their edges`,
     (cy: Core, renderer: GraphRenderer) => {

@@ -184,6 +184,7 @@ export class PathFindPanel implements vscode.Disposable {
         <option value="explore">Explore</option>
       </select>
       <button id="fit" type="button">Fit graph</button>
+      <button id="where-to-break" type="button" title="No visible chokepoints in this graph" disabled>Where to break</button>
     </div>
   </header>
   <main>
@@ -196,6 +197,7 @@ export class PathFindPanel implements vscode.Disposable {
       <ul>
         <li><span class="swatch node" aria-hidden="true"></span>Function</li>
         <li><span class="swatch node target" aria-hidden="true"></span>Selected target</li>
+        <li><span class="swatch chokepoint" aria-hidden="true">&#9671;</span>Chokepoint / breakpoint suggestion</li>
         <li><span class="swatch node path" aria-hidden="true"></span>On current call path</li>
         <li><span class="swatch node current" aria-hidden="true"></span>You are here</li>
         <li><span class="swatch node dimmed" aria-hidden="true"></span>Not on current path</li>
