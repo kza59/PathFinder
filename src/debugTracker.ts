@@ -1,10 +1,13 @@
+import * as fs from 'fs'; // call values feature
 import * as vscode from 'vscode';
+import { CALL_VALUES_DEBUG_TYPES, CallValuesCapture, RESUME_COMMANDS } from './callValues'; // call values feature
 import { findNodeForFrame } from './graphBuilder';
 import type { DebugPath, GraphData } from './types';
 import { PathFindPanel } from './webview/PathFindPanel';
 
 // Minimal slices of the Debug Adapter Protocol types we touch (avoids a dependency).
 interface DapFrame {
+  id?: number; // call values feature: frameId for scopes/variables
   name: string;
   line: number;
   source?: { path?: string };
@@ -32,10 +35,38 @@ export function sendHighlight(path: string[]): void {
 export function registerDebugTracker(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterTrackerFactory('*', {
-      createDebugAdapterTracker: () => createTracker(() => PathFindPanel.currentPanel?.currentGraph),
+      createDebugAdapterTracker: session => createTracker(
+        () => PathFindPanel.currentPanel?.currentGraph,
+        undefined,
+        createCallValuesCapture(session), // call values feature
+      ),
     }),
   );
 }
+
+// --- call values feature ---
+/** Python sessions only; every other debugger gets no capture and behaves exactly as before. */
+function createCallValuesCapture(session: vscode.DebugSession): CallValuesCapture | undefined {
+  if (!CALL_VALUES_DEBUG_TYPES.includes(session.type)) {
+    return undefined;
+  }
+  return new CallValuesCapture({
+    request: (command, args) => session.customRequest(command, args),
+    resolveNode: (file, line) => {
+      const graph = PathFindPanel.currentPanel?.currentGraph;
+      return graph && findNodeForFrame(graph, file, line);
+    },
+    readLines: file => {
+      try {
+        return fs.readFileSync(file, 'utf8').split(/\r?\n/);
+      } catch {
+        return undefined;
+      }
+    },
+    publish: values => PathFindPanel.currentPanel?.setCallValues(values),
+  });
+}
+// --- end call values feature ---
 
 export function resolveDebugPath(frames: DapFrame[], graph: GraphData | undefined): DebugPath {
   const nodeIds = new Set(graph?.nodes.map(node => node.id));
@@ -60,6 +91,7 @@ export function createTracker(
   getGraph: () => GraphData | undefined,
   onFramesChanged: (frames: DapFrame[]) => void = frames =>
     sendHighlight(resolveDebugPath(frames, getGraph())),
+  callValues?: CallValuesCapture, // call values feature
 ): vscode.DebugAdapterTracker {
   // VS Code fetches the stack in PAGES: first just the top frame (startFrame 0, levels 1),
   // then the rest (startFrame 1, ...). So we remember each stackTrace request's arguments
@@ -77,6 +109,11 @@ export function createTracker(
           startFrame: msg.arguments?.startFrame ?? 0,
         });
       }
+      // --- call values feature ---
+      if (msg.type === 'request' && RESUME_COMMANDS.has(msg.command!)) {
+        callValues?.resumed();
+      }
+      // --- end call values feature ---
     },
 
     // debug adapter -> VS Code
@@ -84,8 +121,15 @@ export function createTracker(
       // Remember which thread paused so other threads' stacks are ignored.
       if (msg.type === 'event' && msg.event === 'stopped') {
         stoppedThreadId = msg.body?.threadId;
+        callValues?.paused(); // call values feature
         return;
       }
+      // --- call values feature ---
+      if (msg.type === 'event' && msg.event === 'continued') {
+        callValues?.resumed();
+        return;
+      }
+      // --- end call values feature ---
 
       if (msg.type !== 'response' || msg.command !== 'stackTrace') {
         return;
@@ -103,6 +147,9 @@ export function createTracker(
       const page = msg.body?.stackFrames ?? [];
       frames = frames.slice(0, req.startFrame).concat(page);
       onFramesChanged(frames);
+      callValues?.framesChanged(frames); // call values feature
     },
+
+    onExit: () => callValues?.ended(), // call values feature
   };
 }

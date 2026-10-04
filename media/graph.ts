@@ -2,7 +2,7 @@ import cytoscape, { type Core, type ElementDefinition, type Layouts, type NodeSi
 import cola from 'cytoscape-cola';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
-import type { DebugPath, GraphData, GraphMessage, GraphNode, WebviewMessage } from '../src/types';
+import type { CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, WebviewMessage } from '../src/types';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
 
@@ -18,6 +18,7 @@ export const layoutOptions = {
 
 const nodeLabel = (node: NodeSingular): string => [
   node.data('label'),
+  ...(node.data('callArgs') ? [node.data('callArgs') as string] : []), // call values feature
   ...(node.hasClass('target') ? ['Target'] : []),
   ...(node.hasClass('current') ? ['You are here'] : []),
 ].join('\n');
@@ -44,6 +45,12 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
         'overlay-opacity': 0,
       },
     },
+    // --- call values feature --- smaller text so the args line fits the fixed node box
+    {
+      selector: 'node.has-args',
+      style: { 'font-size': '12px', 'text-overflow-wrap': 'anywhere' },
+    },
+    // --- end call values feature ---
     {
       selector: 'node.target',
       style: {
@@ -154,6 +161,30 @@ export class GraphRenderer {
   private exploreLayout?: Layouts;
   private staticPositions = new Map<string, { x: number; y: number }>();
   public layout: TargetLayout | undefined;
+  // --- call values feature ---
+  private callValues: CallValues = {};
+
+  public callValue(id: string): CallValue | undefined {
+    return Object.prototype.hasOwnProperty.call(this.callValues, id) ? this.callValues[id] : undefined;
+  }
+
+  /** Puts each node's args line ("sum(a=3, b=4)") under its name; nodes without values get none. */
+  public setCallValues(values: CallValues): void {
+    this.callValues = { ...values };
+    this.applyCallValues();
+  }
+
+  private applyCallValues(): void {
+    this.cy.batch(() => this.cy.nodes().forEach(node => {
+      const line = this.callValue(node.id())?.line;
+      if (line) {
+        node.data('callArgs', line).addClass('has-args');
+      } else {
+        node.removeData('callArgs').removeClass('has-args');
+      }
+    }));
+  }
+  // --- end call values feature ---
 
   constructor(
     private readonly cy: Core,
@@ -269,6 +300,7 @@ export class GraphRenderer {
     // Copy coordinates before Explore can move them or the user can drag nodes.
     this.staticPositions = new Map(this.cy.nodes().map(node => [node.id(), { ...node.position() }]));
     if (this.mode === 'explore') this.applyLayoutMode();
+    this.applyCallValues(); // call values feature
     this.highlightPath(this.path);
     this.graphRendered(this.cy.nodes().length);
   }
@@ -401,6 +433,39 @@ export function initializeGraphWebview(): void {
   tooltipLines.className = 'tooltip-lines';
   const tooltipConnections = tooltip.appendChild(document.createElement('div'));
   const tooltipDistance = tooltip.appendChild(document.createElement('div'));
+  // --- call values feature ---
+  const tooltipArgs = tooltip.appendChild(document.createElement('div'));
+  tooltipArgs.className = 'tooltip-args';
+  const renderTooltipArgs = (value: CallValue | undefined) => {
+    tooltipArgs.replaceChildren();
+    tooltipArgs.hidden = !value;
+    if (!value) {
+      return;
+    }
+    const heading = tooltipArgs.appendChild(document.createElement('div'));
+    heading.className = 'tooltip-args-heading';
+    heading.textContent = value.atEntry
+      ? 'Arguments (paused on first line: as passed)'
+      : 'Arguments (value at pause: may have been reassigned since the call)';
+    if (!value.args.length) {
+      tooltipArgs.appendChild(document.createElement('div')).textContent = '(no parameters)';
+    }
+    for (const arg of value.args) {
+      const row = tooltipArgs.appendChild(document.createElement('div'));
+      row.className = 'tooltip-arg';
+      row.textContent = arg.value === undefined ? `${arg.name} = (not in locals)` : `${arg.name} = ${arg.value}`;
+    }
+    const notes = [
+      ...(value.more ? [`+${value.more} more ${value.more === 1 ? 'call' : 'calls'} of this function on the stack (showing the innermost)`] : []),
+      ...(value.stale ? ['Program has resumed: last values seen at the previous pause'] : []),
+    ];
+    for (const note of notes) {
+      const row = tooltipArgs.appendChild(document.createElement('div'));
+      row.className = 'tooltip-lines';
+      row.textContent = note;
+    }
+  };
+  // --- end call values feature ---
   tooltipHost.appendChild(tooltip);
 
   const TOOLTIP_OFFSET = 14;
@@ -442,6 +507,7 @@ export function initializeGraphWebview(): void {
     const callers = element.incomers('node').length;
     const callees = element.outgoers('node').length;
     tooltipConnections.textContent = `${callers} ${callers === 1 ? 'caller' : 'callers'} · ${callees} ${callees === 1 ? 'callee' : 'callees'}`;
+    renderTooltipArgs(renderer.callValue(node.id)); // call values feature
     tooltip.hidden = false;
     moveTooltip(event.renderedPosition.x, event.renderedPosition.y);
   });
@@ -508,6 +574,11 @@ export function initializeGraphWebview(): void {
       case 'debugClear':
         renderer.clearDebugPath();
         break;
+      // --- call values feature ---
+      case 'callValues':
+        renderer.setCallValues(message.values);
+        break;
+      // --- end call values feature ---
     }
   });
 

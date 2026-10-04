@@ -158,6 +158,27 @@ footer {
 }
 /* --- end hover tooltip feature --- */
 
+/* --- call values feature --- */
+#node-tooltip .tooltip-args {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, #454545));
+}
+
+#node-tooltip .tooltip-args[hidden] {
+  display: none;
+}
+
+#node-tooltip .tooltip-args-heading {
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+
+#node-tooltip .tooltip-arg {
+  font-family: var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+}
+/* --- end call values feature --- */
+
 /* --- legend feature --- */
 /* --pf-* colors are set from graphStyles() in media/graph.ts, so they always match the graph. */
 #legend {
