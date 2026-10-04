@@ -3,12 +3,16 @@ import { buildCallGraph } from './graphBuilder';
 import { registerGraphRendererTestCommands } from './test/graphRendererTest';
 import { PathFindPanel } from './webview/PathFindPanel';
 import { registerDebugTracker } from './debugTracker';
+import { registerHotPathCounting } from './hotPath'; // hot-path counting
 import { registerRecursionLog } from './recursionLog';
 
 export function activate(context: vscode.ExtensionContext) {
   registerGraphRendererTestCommands(context);
   const output = vscode.window.createOutputChannel('PathFinder');
   registerDebugTracker(context);
+  // --- hot-path counting ---
+  registerHotPathCounting(context);
+  // --- end hot-path counting ---
   // registerRecursionLog(context); // TEMPORARY: see src/recursionLog.ts
 
   // --- click-to-code feature ---

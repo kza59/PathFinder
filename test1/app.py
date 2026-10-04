@@ -14,4 +14,5 @@ def function3():
 
 
 if __name__ == "__main__":
-    print(function3())
+     for _ in range(1000):
+           function3()
