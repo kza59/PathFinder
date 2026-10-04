@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { makeNodeId, MODULE_NAME, normalizePath } from './nodeId';
 import { DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES } from './limits';
+import { markChokepoints } from './chokepoints';
 import { markRecursion } from './recursion';
 
 export { DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES } from './limits';
@@ -15,6 +16,7 @@ export interface GraphNode {
   recursionGroup?: number; // set on nodes in a recursive structure; members of the same cycle share the number
   hiddenCallers?: number;  // callers that exist but were left out (depth or node limit reached); the graph is cut off here
   noise?: true;            // usually uninteresting: top-level <module> code, constructors/destructors, tests
+  chokepoint?: true;       // every path to the target passes through here: one breakpoint here catches them all
 }
 
 export interface GraphEdge {
@@ -270,7 +272,7 @@ class GraphBuilder {
 
   /** Starts from an existing graph (copied, never mutated), so a walk can extend it. Recursion is recomputed later. */
   seed(graph: CallGraph) {
-    for (const { recursionGroup: _group, ...node } of graph.nodes) {
+    for (const { recursionGroup: _group, chokepoint: _chokepoint, ...node } of graph.nodes) {
       this.nodes.set(node.id, { ...node });
       this.idByLocation.set(`${vscode.Uri.file(node.file).toString()}#${node.line - 1}`, node.id);
     }
@@ -296,7 +298,7 @@ class GraphBuilder {
 
   /** `targetIds`: the functions PathFind was run on, which the renderer lays the graph out around. */
   result(targetIds?: string[]): CallGraph {
-    return markRecursion({ nodes: [...this.nodes.values()], edges: [...this.edges.values()], targetIds });
+    return markChokepoints(markRecursion({ nodes: [...this.nodes.values()], edges: [...this.edges.values()], targetIds }));
   }
 }
 

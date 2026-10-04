@@ -18,6 +18,7 @@ export interface Case {
   hiddenCallers?: Record<string, number>; // node id -> callers left out; omitted = graph expected complete
   expand?: string[]; // node ids passed to expandCallers in order after building, before comparing
   noise?: string[]; // node ids expected to be tagged noise, besides <module> nodes (always noise); omitted = none
+  chokepoints?: string[]; // node ids expected to be marked chokepoints; omitted = none
 }
 
 interface ReadmeLines {
@@ -149,6 +150,8 @@ const defaultDepthCutoff = {
   nodes: Array.from({ length: DEFAULT_MAX_DEPTH + 1 }, (_, k) => chainId(k)),
   edges: Array.from({ length: DEFAULT_MAX_DEPTH }, (_, i) => [chainId(i + 1), chainId(i), [4 * (i + 1) + 2]]) as ExpectedEdge[],
   hiddenCallers: { [chainId(DEFAULT_MAX_DEPTH)]: 1 },
+  // Every level below the cut-off is certain: the hidden callers attach above them.
+  chokepoints: Array.from({ length: DEFAULT_MAX_DEPTH - 1 }, (_, i) => chainId(i + 1)),
 };
 
 export const CASES: Record<string, Case[]> = {
@@ -224,6 +227,7 @@ export const CASES: Record<string, Case[]> = {
         ['main.py::main', 'main.py::dog_owner', [13]],
         ['main.py::<module>', 'main.py::main', [18]],
       ],
+      chokepoints: ['main.py::dog_owner'],
     },
   ],
   'test4/cpp': [
@@ -247,6 +251,7 @@ export const CASES: Record<string, Case[]> = {
         ['main.cpp::dog_owner', 'animals.cpp::Dog::speak', [5]],
         ['main.cpp::main', 'main.cpp::dog_owner', [15]],
       ],
+      chokepoints: ['main.cpp::dog_owner'],
     },
   ],
   'test5/python': [
@@ -295,6 +300,7 @@ export const CASES: Record<string, Case[]> = {
       expand: [chainId(DEFAULT_MAX_DEPTH)],
       ...chain(2 * DEFAULT_MAX_DEPTH),
       hiddenCallers: { [chainId(2 * DEFAULT_MAX_DEPTH)]: 1 },
+      chokepoints: Array.from({ length: 2 * DEFAULT_MAX_DEPTH - 1 }, (_, i) => chainId(i + 1)),
     },
     {
       name: 'deep chain: expanding again reaches main and the graph is complete',
@@ -302,6 +308,7 @@ export const CASES: Record<string, Case[]> = {
       expand: [chainId(DEFAULT_MAX_DEPTH), chainId(2 * DEFAULT_MAX_DEPTH)],
       nodes: [...chain(20).nodes, 'main.py::main', 'main.py::<module>'],
       edges: [...chain(20).edges, ['main.py::main', chainId(20), [5]], ['main.py::<module>', 'main.py::main', [9]]],
+      chokepoints: Array.from({ length: 20 }, (_, i) => chainId(i + 1)),
     },
   ],
   // Neither Pylance nor the C/C++ extension reports creating an object (`Service()`, `Service service;`) as a call
