@@ -487,6 +487,25 @@ export function initializeGraphWebview(): void {
     renderBreadcrumb();
   });
   // --- end breadcrumb feature ---
+
+  // --- copy path feature ---
+  // The text is read from the rendered breadcrumb crumbs, so it is exactly what the breadcrumb shows
+  // (same labels, same collapsed "(outside graph ×N)" crumbs). The extension writes the clipboard,
+  // since clipboard access inside a webview is unreliable.
+  const copyPathButton = document.getElementById('copy-path') as HTMLButtonElement;
+  const syncCopyPathButton = () => {
+    copyPathButton.disabled = breadcrumb.hidden;
+  };
+  copyPathButton.addEventListener('click', () => {
+    const text = Array.from(breadcrumb.querySelectorAll('.crumb'), crumb => crumb.textContent ?? '').join(' → ');
+    if (text) {
+      vscode.postMessage({ type: 'copyPath', text });
+    }
+  });
+  // Registered after the breadcrumb's listener, so the breadcrumb is already re-rendered here.
+  window.addEventListener('message', syncCopyPathButton);
+  syncCopyPathButton();
+  // --- end copy path feature ---
   window.addEventListener('unload', () => {
     observer.disconnect();
     cy.destroy();

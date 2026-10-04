@@ -248,3 +248,11 @@ footer {
   font-weight: bold;
 }
 /* --- end breadcrumb feature --- */
+
+/* --- copy path feature --- */
+#copy-path:disabled {
+  opacity: 0.5;
+  cursor: default;
+  background: var(--vscode-button-background, #0e639c);
+}
+/* --- end copy path feature --- */
