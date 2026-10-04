@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
-import type { DebugPath, GraphData, GraphMessage, NodeClickedMessage } from '../types';
+import type { DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage } from '../types';
 
 export class PathFindPanel implements vscode.Disposable {
   public static currentPanel: PathFindPanel | undefined;
@@ -10,6 +10,12 @@ export class PathFindPanel implements vscode.Disposable {
   public readonly onDidClickNode = this.nodeClicked.event;
   private graph: GraphData | undefined;
   private debugPath: DebugPath = [];
+  // --- hot-path counting ---
+  private static readonly graphRendered = new vscode.EventEmitter<PathFindPanel>();
+  /** Fires after any panel renders a new graph, so hot counts can be re-mapped onto its nodes. */
+  public static readonly onDidRenderGraph = PathFindPanel.graphRendered.event;
+  private hotCounts: HotCounts = {};
+  // --- end hot-path counting ---
   private ready = false;
   private disposed = false;
 
@@ -53,6 +59,11 @@ export class PathFindPanel implements vscode.Disposable {
             this.send({ type: 'graph', graph: this.graph });
           }
           this.sendDebugState();
+          // --- hot-path counting ---
+          if (Object.keys(this.hotCounts).length) {
+            this.send({ type: 'hotCounts', counts: this.hotCounts });
+          }
+          // --- end hot-path counting ---
         } else if (
           message.type === 'nodeClicked' &&
           'id' in message && typeof message.id === 'string' &&
@@ -72,7 +83,15 @@ export class PathFindPanel implements vscode.Disposable {
   public renderGraph(graph: GraphData): void {
     this.graph = graph;
     this.send({ type: 'graph', graph });
+    PathFindPanel.graphRendered.fire(this); // hot-path counting
   }
+
+  // --- hot-path counting ---
+  public setHotCounts(counts: HotCounts): void {
+    this.hotCounts = { ...counts };
+    this.send({ type: 'hotCounts', counts: this.hotCounts });
+  }
+  // --- end hot-path counting ---
 
   public get currentGraph(): GraphData | undefined {
     return this.graph;

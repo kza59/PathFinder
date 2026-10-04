@@ -3,11 +3,15 @@ import { buildCallGraph } from './graphBuilder';
 import { registerGraphRendererTestCommands } from './test/graphRendererTest';
 import { PathFindPanel } from './webview/PathFindPanel';
 import { registerDebugTracker } from './debugTracker';
+import { registerHotPathCounting } from './hotPath'; // hot-path counting
 
 export function activate(context: vscode.ExtensionContext) {
   registerGraphRendererTestCommands(context);
   const output = vscode.window.createOutputChannel('PathFinder');
   registerDebugTracker(context);
+  // --- hot-path counting ---
+  registerHotPathCounting(context);
+  // --- end hot-path counting ---
 
   // --- click-to-code feature ---
   // The panel is created lazily (and re-created after it's closed), so subscribe per panel instance.
