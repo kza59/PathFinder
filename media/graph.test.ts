@@ -686,6 +686,24 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(cy.$('.current').length, 0);
     assert.equal(cy.edges().length, fixture.edges.length);
   }],
+  // --- call values feature ---
+  ['call values put an args line under the name, survive a re-render, and clear', (cy, renderer) => {
+    const label = (id: string) => cy.$id(id).style('label') as string;
+    renderer.setCallValues({ a: { line: '(x=3, y=4)', args: [{ name: 'x', value: '3' }, { name: 'y', value: '4' }], atEntry: true } });
+    assert.equal(label('a'), 'a\n(x=3, y=4)');
+    assert.equal(cy.$id('a').hasClass('has-args'), true);
+    assert.equal(label('b'), 'b');
+    renderer.highlightPath(['root', 'a']);
+    assert.equal(label('a'), 'a\n(x=3, y=4)\nYou are here');
+    renderer.renderGraph(fixture);
+    assert.equal(label('a'), 'a\n(x=3, y=4)\nYou are here');
+    assert.equal(renderer.callValue('a')?.atEntry, true);
+    assert.equal(renderer.callValue('toString'), undefined);
+    renderer.setCallValues({});
+    assert.equal(label('a'), 'a\nYou are here');
+    assert.equal(cy.$('.has-args').length, 0);
+  }],
+  // --- end call values feature ---
 ];
 
 async function main(): Promise<void> {

@@ -11,8 +11,27 @@
     "Debuggers"
   ],
   "main": "./out/extension.js",
-  "activationEvents": ["onDebug"],
+  "activationEvents": [
+    "onDebug"
+  ],
   "contributes": {
+    "configuration": {
+      "title": "PathFinder",
+      "properties": {
+        "pathfinder.explain.provider": {
+          "type": "string",
+          "enum": ["claude", "openai", "gemini"],
+          "enumDescriptions": ["Claude (Anthropic)", "ChatGPT (OpenAI)", "Gemini (Google)"],
+          "default": "claude",
+          "description": "Which AI \"Explain Current Path\" uses. Optional feature: set a key with \"PathFinder: Set AI API Key\"."
+        },
+        "pathfinder.explain.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use instead of the provider's default (claude-opus-5-5, gpt-6.1-sol, gemini-3.8-flash). Leave empty for the default."
+        }
+      }
+    },
     "commands": [
       {
         "command": "pathfinder.pathFind",
@@ -37,10 +56,34 @@
       {
         "command": "pathfind.clearDebugPath",
         "title": "PathFind: Clear Debug Path"
+      },
+      {
+        "command": "pathfinder.explainPath",
+        "title": "PathFinder: Explain Current Path",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "pathfinder.setApiKey",
+        "title": "PathFinder: Set AI API Key (Claude, ChatGPT or Gemini)"
+      },
+      {
+        "command": "pathfinder.clearApiKey",
+        "title": "PathFinder: Clear AI API Key"
       }
     ],
     "menus": {
+      "debug/toolBar": [
+        {
+          "command": "pathfinder.explainPath",
+          "when": "inDebugMode && debugState == 'stopped'"
+        }
+      ],
       "editor/context": [
+        {
+          "command": "pathfinder.explainPath",
+          "when": "inDebugMode && debugState == 'stopped'",
+          "group": "navigation"
+        },
         {
           "command": "pathfinder.pathFind",
           "group": "navigation"
@@ -56,18 +99,21 @@
     "vscode:prepublish": "npm run compile",
     "test": "tsc -p tsconfig.extension.json && node out/test/runTest.js",
     "test:debug": "tsc -p tsconfig.extension.json && node out/test/runTest.js --debug",
-    "test:unit": "tsc -p tsconfig.extension.json && node out/test/debugTracker.unit.js && node out/test/recursion.unit.js && node out/test/chokepoints.unit.js && node out/test/targetLayout.unit.js && npm run test:renderer",
+    "test:unit": "tsc -p tsconfig.extension.json && node out/test/debugTracker.unit.js && node out/test/recursion.unit.js && node out/test/chokepoints.unit.js && node out/test/callValues.unit.js && node out/test/targetLayout.unit.js && npm run test:renderer",
     "test:renderer": "tsc -p tsconfig.webview.json && esbuild media/graph.test.ts --bundle --platform=node --outfile=out/test/graphRenderer.unit.js && node out/test/graphRenderer.unit.js"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
-    "esbuild": "^0.28.2",
     "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.28.2",
     "typescript": "^5.4.0"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@google/genai": "^2.27.0",
     "cytoscape": "^3.34.3",
-    "cytoscape-cola": "^2.5.1"
+    "cytoscape-cola": "^2.5.1",
+    "openai": "^6.49.0"
   }
 }

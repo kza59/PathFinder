@@ -93,7 +93,7 @@ async function main() {
         vscodeExecutablePath: fs.existsSync(installed) ? installed : undefined,
         extensionDevelopmentPath: repo,
         extensionTestsPath: path.join(__dirname, debug ? 'debugSuite' : 'suite'),
-        extensionTestsEnv: { PATHFINDER_FIXTURE: fixture, PATHFINDER_LOG: progressLog, PATHFINDER_TIMEOUT: process.env.PATHFINDER_TIMEOUT },
+        extensionTestsEnv: { PATHFINDER_FIXTURE: fixture, PATHFINDER_LOG: progressLog, PATHFINDER_TIMEOUT: process.env.PATHFINDER_TIMEOUT, PATHFINDER_SHOW_PROMPT: process.env.PATHFINDER_SHOW_PROMPT },
         launchArgs: [
           path.join(repo, fixture),
           '--extensions-dir', path.join(os.homedir(), '.vscode', 'extensions'),

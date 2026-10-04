@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
-import type { DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage } from '../types';
+import type { CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage } from '../types';
 
 export class PathFindPanel implements vscode.Disposable {
   public static currentPanel: PathFindPanel | undefined;
@@ -16,6 +16,7 @@ export class PathFindPanel implements vscode.Disposable {
   public static readonly onDidRenderGraph = PathFindPanel.graphRendered.event;
   private hotCounts: HotCounts = {};
   // --- end hot-path counting ---
+  private callValues: CallValues = {}; // call values feature
   private ready = false;
   private disposed = false;
 
@@ -64,6 +65,11 @@ export class PathFindPanel implements vscode.Disposable {
             this.send({ type: 'hotCounts', counts: this.hotCounts });
           }
           // --- end hot-path counting ---
+          // --- call values feature ---
+          if (Object.keys(this.callValues).length) {
+            this.send({ type: 'callValues', values: this.callValues });
+          }
+          // --- end call values feature ---
         } else if (
           message.type === 'nodeClicked' &&
           'id' in message && typeof message.id === 'string' &&
@@ -100,6 +106,13 @@ export class PathFindPanel implements vscode.Disposable {
     this.send({ type: 'hotCounts', counts: this.hotCounts });
   }
   // --- end hot-path counting ---
+
+  // --- call values feature ---
+  public setCallValues(values: CallValues): void {
+    this.callValues = { ...values };
+    this.send({ type: 'callValues', values: this.callValues });
+  }
+  // --- end call values feature ---
 
   public get currentGraph(): GraphData | undefined {
     return this.graph;

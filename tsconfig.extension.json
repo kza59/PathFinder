@@ -1,4 +1,9 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // @google/genai's type definitions mention browser-only types (RequestInfo, CloseEvent) that aren't loaded in
+    // a Node extension. Skip checking dependencies' .d.ts files; our own code is still fully type-checked.
+    "skipLibCheck": true
+  },
   "include": ["src"]
 }
