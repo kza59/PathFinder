@@ -8,6 +8,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { runTests } from '@vscode/test-electron';
 import { CASES } from './cases';
+import { DEBUG_CASES } from './debugCases';
 
 // Extensions PathFinder doesn't need, turned off to speed up each test window (unknown IDs are ignored).
 // Python/Pylance/debugpy and Microsoft C/C++ stay on: call hierarchy comes from them.
@@ -69,8 +70,11 @@ function streamFile(file: string): () => void {
 
 async function main() {
   const repo = path.resolve(__dirname, '../..');
-  const requested = process.argv.slice(2);
-  const fixtures = requested.length ? requested : Object.keys(CASES);
+  // --debug runs the end-to-end debugger cases (debugSuite.ts) instead of the call graph cases (suite.ts).
+  const debug = process.argv.includes('--debug');
+  const requested = process.argv.slice(2).filter(arg => arg !== '--debug');
+  const allCases: Record<string, unknown[]> = debug ? DEBUG_CASES : CASES;
+  const fixtures = requested.length ? requested : Object.keys(allCases);
   const installed = process.env.VSCODE_EXECUTABLE ?? '/usr/share/code/code';
   const progressLog = path.join(repo, '.vscode-test', 'progress.log');
   fs.mkdirSync(path.dirname(progressLog), { recursive: true });
@@ -78,7 +82,7 @@ async function main() {
 
   const results: string[] = [];
   for (const [i, fixture] of fixtures.entries()) {
-    const header = `\n${bar(i, fixtures.length)}  ${fixture}  (${CASES[fixture].length} cases)\n`;
+    const header = `\n${bar(i, fixtures.length)}  ${fixture}  (${allCases[fixture].length} cases)\n`;
     fs.appendFileSync(progressLog, header);
     const stop = streamFile(progressLog);
     process.stdout.write(header);
@@ -88,7 +92,7 @@ async function main() {
       await runTests({
         vscodeExecutablePath: fs.existsSync(installed) ? installed : undefined,
         extensionDevelopmentPath: repo,
-        extensionTestsPath: path.join(__dirname, 'suite'),
+        extensionTestsPath: path.join(__dirname, debug ? 'debugSuite' : 'suite'),
         extensionTestsEnv: { PATHFINDER_FIXTURE: fixture, PATHFINDER_LOG: progressLog, PATHFINDER_TIMEOUT: process.env.PATHFINDER_TIMEOUT },
         launchArgs: [
           path.join(repo, fixture),

@@ -55,7 +55,8 @@
     "watch:webview": "npm run build:webview -- --watch",
     "vscode:prepublish": "npm run compile",
     "test": "tsc -p tsconfig.extension.json && node out/test/runTest.js",
-    "test:unit": "tsc -p tsconfig.extension.json && node out/test/recursion.unit.js && node out/test/targetLayout.unit.js && npm run test:renderer",
+    "test:debug": "tsc -p tsconfig.extension.json && node out/test/runTest.js --debug",
+    "test:unit": "tsc -p tsconfig.extension.json && node out/test/recursion.unit.js && node out/test/chokepoints.unit.js && node out/test/targetLayout.unit.js && npm run test:renderer",
     "test:renderer": "tsc -p tsconfig.webview.json && esbuild media/graph.test.ts --bundle --platform=node --outfile=out/test/graphRenderer.unit.js && node out/test/graphRenderer.unit.js"
   },
   "devDependencies": {

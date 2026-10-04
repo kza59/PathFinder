@@ -613,7 +613,76 @@ export function initializeGraphWebview(): void {
     renderBreadcrumb();
   });
   // --- end breadcrumb feature ---
+
+  // --- copy path feature ---
+  // The text is read from the rendered breadcrumb crumbs, so it is exactly what the breadcrumb shows
+  // (same labels, same collapsed "(outside graph ×N)" crumbs). The extension writes the clipboard,
+  // since clipboard access inside a webview is unreliable.
+  const copyPathButton = document.getElementById('copy-path') as HTMLButtonElement;
+  const syncCopyPathButton = () => {
+    copyPathButton.disabled = breadcrumb.hidden;
+  };
+  copyPathButton.addEventListener('click', () => {
+    const text = Array.from(breadcrumb.querySelectorAll('.crumb'), crumb => crumb.textContent ?? '').join(' → ');
+    if (text) {
+      vscode.postMessage({ type: 'copyPath', text });
+    }
+  });
+  // Registered after the breadcrumb's listener, so the breadcrumb is already re-rendered here.
+  window.addEventListener('message', syncCopyPathButton);
+  syncCopyPathButton();
+  // --- end copy path feature ---
+
+  // --- replay feature ---
+  // Replays the path by calling the renderer's own highlightPath on a growing prefix of it, so every
+  // frame uses the existing path / current / dimmed styling. The last frame is the full path, which
+  // leaves exactly the state a debugPath message produces.
+  const REPLAY_STEP_MS = 500;
+  const replayButton = document.getElementById('replay-path') as HTMLButtonElement;
+  let replayPath: DebugPath = [];
+  let replayTimer: ReturnType<typeof setTimeout> | undefined;
+  const stopReplay = () => {
+    clearTimeout(replayTimer);
+    replayTimer = undefined;
+  };
+  replayButton.addEventListener('click', () => {
+    stopReplay(); // clicking while playing restarts from the beginning
+    const path = [...replayPath];
+    // One frame per path entry that is a node in this graph (an "(outside graph)" placeholder
+    // would show no change), plus the full path as the final frame.
+    const ends = path
+      .map((id, index) => (cy.getElementById(id).isNode() ? index + 1 : 0))
+      .filter(end => end > 0 && end < path.length);
+    const frames = [0, ...ends, path.length];
+    const step = (frame: number) => {
+      renderer.highlightPath(path.slice(0, frames[frame]));
+      replayTimer = frame + 1 < frames.length ? setTimeout(() => step(frame + 1), REPLAY_STEP_MS) : undefined;
+    };
+    step(0);
+  });
+  // Registered after the renderer's listener, which has already applied the new highlight.
+  window.addEventListener('message', (event: MessageEvent<GraphMessage>) => {
+    const message = event.data;
+    if (!message || typeof message !== 'object') {
+      return;
+    }
+    if (message.type === 'debugPath') {
+      stopReplay();
+      replayPath = [...message.path];
+    } else if (message.type === 'debugClear') {
+      stopReplay();
+      replayPath = [];
+    } else if (message.type === 'graph' && replayTimer !== undefined) {
+      // renderGraph re-applied the half-replayed prefix; show the full path instead.
+      stopReplay();
+      renderer.highlightPath(replayPath);
+    }
+    replayButton.disabled = breadcrumb.hidden;
+  });
+  replayButton.disabled = breadcrumb.hidden;
+  // --- end replay feature ---
   window.addEventListener('unload', () => {
+    stopReplay(); // replay feature
     observer.disconnect();
     renderer.dispose();
     cy.destroy();
