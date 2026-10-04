@@ -10,6 +10,7 @@ export class PathFindPanel implements vscode.Disposable {
   public readonly onDidClickNode = this.nodeClicked.event;
   private graph: GraphData | undefined;
   private debugPath: DebugPath = [];
+  private crashed = false; // the current path is how the program reached an exception
   // --- hot-path counting ---
   private static readonly graphRendered = new vscode.EventEmitter<PathFindPanel>();
   /** Fires after any panel renders a new graph, so hot counts can be re-mapped onto its nodes. */
@@ -125,8 +126,27 @@ export class PathFindPanel implements vscode.Disposable {
 
   public clearDebugPath(): void {
     this.debugPath = [];
+    this.crashed = false;
     this.sendDebugState();
   }
+
+  // --- crash path ---
+  /** Marks the highlighted path as the route to an exception (or not), e.g. so it can be drawn in red. */
+  public setCrashed(crashed: boolean): void {
+    if (this.crashed !== crashed) {
+      this.crashed = crashed;
+      this.sendDebugState();
+    }
+  }
+
+  public get currentDebugPath(): DebugPath {
+    return [...this.debugPath];
+  }
+
+  public get isCrashed(): boolean {
+    return this.crashed;
+  }
+  // --- end crash path ---
 
   public dispose(): void {
     if (this.disposed) {
@@ -142,7 +162,7 @@ export class PathFindPanel implements vscode.Disposable {
 
   private sendDebugState(): void {
     this.send(this.debugPath.length
-      ? { type: 'debugPath', path: this.debugPath }
+      ? { type: 'debugPath', path: this.debugPath, ...(this.crashed ? { crashed: true } : {}) }
       : { type: 'debugClear' });
   }
 

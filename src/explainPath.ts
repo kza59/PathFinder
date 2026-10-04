@@ -33,7 +33,8 @@ Explain in plain English how execution got here and what is happening right now:
 path, then one or two sentences on the paused function, using the variable values that explain its behaviour. Refer
 to functions by name. Keep it under about 150 words. Do not restate the code line by line, and do not speculate
 beyond what the code and values show; if something important is missing (frames or values were left out), say so
-briefly.`;
+briefly. If the program stopped because of an exception or crash, lead with what caused it, using the values that
+show why.`;
 
 /** What the panel (or anything else) can listen to, to show the explanation as it streams in. */
 export type ExplanationEvent =
@@ -120,14 +121,35 @@ async function frameVariables(session: vscode.DebugSession, frameId: number): Pr
 }
 
 /** The paused call stack, outermost caller first, limited to frames with readable source files. */
-async function collectStack(session: vscode.DebugSession, graph: GraphData | undefined): Promise<{ frames: CollectedFrame[]; omitted: number }> {
+interface CollectedStack {
+  frames: CollectedFrame[];   // the project's own frames, outermost first
+  omitted: number;            // project frames left out to keep it short
+  libraryCalls: string[];     // library/runtime functions above the innermost project frame, outermost first
+}
+
+const MAX_LIBRARY_CALLS = 10;
+
+async function collectStack(session: vscode.DebugSession, graph: GraphData | undefined): Promise<CollectedStack> {
   const threadId = await pausedThreadId(session);
   if (threadId === undefined) {
     throw new Error('the debugger reports no threads');
   }
   const reply = await session.customRequest('stackTrace', { threadId, startFrame: 0, levels: 500 });
-  // Frames without a readable source file (system libraries, the language runtime) aren't explained.
-  const all: DapFrame[] = (reply?.stackFrames ?? []).filter((f: DapFrame) => f.source?.path && fs.existsSync(f.source.path));
+  const raw: DapFrame[] = reply?.stackFrames ?? [];
+  // Only the project's own code is explained: frames from system libraries or headers (libc, the C++ standard
+  // library under /usr/include, the language runtime) are left out, even when their source is on disk.
+  const isProject = (f: DapFrame) => Boolean(f.source?.path && fs.existsSync(f.source.path)
+    && vscode.workspace.getWorkspaceFolder(vscode.Uri.file(f.source.path)) !== undefined);
+  const all = raw.filter(isProject);
+  // ...but the library calls the program was inside when it stopped say what went wrong in a crash
+  // (C++: std::stoi -> std::__throw_invalid_argument -> __cxa_throw -> std::terminate -> abort).
+  const firstProject = raw.findIndex(isProject);
+  // Keep the calls nearest the project code (what it actually called), not the deepest ones.
+  const above = raw.slice(0, firstProject === -1 ? 0 : firstProject);
+  const libraryCalls = above.slice(-MAX_LIBRARY_CALLS)
+    .map(f => f.name.replace(/\(.*$/s, '').replace(/^[^\s!]+!/, '').trim()) // gdb's "libstdc++.so.6!" module prefix
+    .filter(name => name && !name.startsWith('['))                            // "[Unknown/Just-In-Time compiled code]"
+    .reverse();
   const innermostFirst = all.length > MAX_FRAMES ? [...all.slice(0, MAX_FRAMES - 2), ...all.slice(-2)] : all;
   const frames: CollectedFrame[] = [];
   for (const frame of innermostFirst.reverse()) {
@@ -140,10 +162,60 @@ async function collectStack(session: vscode.DebugSession, graph: GraphData | und
       variables: await frameVariables(session, frame.id).catch(() => []),
     });
   }
-  return { frames, omitted: all.length - innermostFirst.length };
+  return { frames, omitted: all.length - innermostFirst.length, libraryCalls };
 }
 
-function describeStack(frames: CollectedFrame[], omitted: number): string {
+/** Why the debugger last stopped, from its 'stopped' event. */
+export interface StopInfo {
+  reason: string;        // 'breakpoint', 'step', 'exception', ...
+  threadId?: number;
+  description?: string;  // e.g. "Exception has occurred."
+  text?: string;         // e.g. the exception message
+}
+
+/** What Explain remembers about each debug session, from the messages the debugger sends. */
+interface SessionState {
+  stop?: StopInfo;                // the latest stop, cleared when the program continues
+  supportsExceptionInfo: boolean; // declared by the debugger when the session starts
+}
+const sessions = new Map<string, SessionState>();
+const stateOf = (id: string) => {
+  let state = sessions.get(id);
+  if (!state) {
+    sessions.set(id, state = { supportsExceptionInfo: false });
+  }
+  return state;
+};
+
+/**
+ * What to tell the model about an exception, only when the program stopped because of one; undefined otherwise:
+ * the exception (from the debugger's 'exceptionInfo' request when it supports it, else the stop event's own text,
+ * e.g. gdb's "Segmentation fault"), plus the library calls it happened inside, which is where C++ shows the
+ * exception type (gdb only reports the resulting abort).
+ */
+async function exceptionLine(session: vscode.DebugSession, stop: StopInfo | undefined, libraryCalls: string[]): Promise<string | undefined> {
+  if (stop?.reason !== 'exception') {
+    return undefined;
+  }
+  let detail: string | undefined;
+  // Only ask debuggers that declare support: the C/C++ extension never answers exceptionInfo, and while that request
+  // is outstanding it stops answering everything else, including "continue".
+  if (sessions.get(session.id)?.supportsExceptionInfo) {
+    try {
+      const info = await session.customRequest('exceptionInfo', { threadId: stop.threadId });
+      const type = info?.details?.typeName || info?.exceptionId;
+      const message = info?.details?.message || info?.description;
+      detail = [type, message].filter(Boolean).join(': ') || undefined;
+    } catch {
+      // fall back to the stop event below
+    }
+  }
+  detail ??= [stop.text, stop.description].filter(Boolean).join(': ') || 'details not reported by the debugger';
+  const inside = libraryCalls.length ? `\nIt happened inside these library calls (outermost first): ${libraryCalls.join(' -> ')}` : '';
+  return `The program stopped because of an exception: ${detail}${inside}`;
+}
+
+function describeStack(frames: CollectedFrame[], omitted: number, exception?: string): string {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const parts = frames.map((frame, i) => {
     const where = root && frame.file.startsWith(root) ? path.relative(root, frame.file) : frame.file;
@@ -159,13 +231,14 @@ function describeStack(frames: CollectedFrame[], omitted: number): string {
   if (omitted > 0) {
     parts.splice(2, 0, `(${omitted} frames in the middle of the stack were left out to keep this short.)`);
   }
-  return `Call stack, outermost caller first:\n\n${parts.join('\n\n')}`;
+  const stack = `Call stack, outermost caller first:\n\n${parts.join('\n\n')}`;
+  return exception ? `${exception}\n\n${stack}` : stack;
 }
 
 /** The exact text that would be sent for the current pause. Exported for tests: no API call is made. */
-export async function explanationPrompt(session: vscode.DebugSession, graph: GraphData | undefined): Promise<string> {
-  const { frames, omitted } = await collectStack(session, graph);
-  return describeStack(frames, omitted);
+export async function explanationPrompt(session: vscode.DebugSession, graph: GraphData | undefined, stop?: StopInfo): Promise<string> {
+  const { frames, omitted, libraryCalls } = await collectStack(session, graph);
+  return describeStack(frames, omitted, await exceptionLine(session, stop ?? sessions.get(session.id)?.stop, libraryCalls));
 }
 
 // --- choosing a provider and its key ---
@@ -263,9 +336,11 @@ export function registerExplainPath(context: vscode.ExtensionContext): void {
     }
 
     running?.abort();
-    let stack: { frames: CollectedFrame[]; omitted: number };
+    let stack: CollectedStack;
+    let exception: string | undefined;
     try {
       stack = await collectStack(session, PathFindPanel.currentPanel?.currentGraph);
+      exception = await exceptionLine(session, sessions.get(session.id)?.stop, stack.libraryCalls);
     } catch (error) {
       vscode.window.showWarningMessage(`PathFinder: couldn't read the call stack. Is the program paused? (${error instanceof Error ? error.message : error})`);
       return;
@@ -288,7 +363,7 @@ export function registerExplainPath(context: vscode.ExtensionContext): void {
       async () => {
         try {
           const result = await streamExplanation({
-            provider, apiKey: key, model, system: SYSTEM_PROMPT, user: describeStack(stack.frames, stack.omitted),
+            provider, apiKey: key, model, system: SYSTEM_PROMPT, user: describeStack(stack.frames, stack.omitted, exception),
             signal: controller.signal,
             onText: delta => {
               text += delta;
@@ -331,6 +406,25 @@ export function registerExplainPath(context: vscode.ExtensionContext): void {
     events,
     { dispose: () => running?.abort() },
     vscode.commands.registerCommand('pathfinder.explainPath', explain),
+    // Remember why each session last stopped and what its debugger supports (only an 'exception' stop uses either).
+    vscode.debug.registerDebugAdapterTrackerFactory('*', {
+      createDebugAdapterTracker: session => ({
+        onDidSendMessage: (message: {
+          type?: string; event?: string; command?: string;
+          body?: StopInfo & { supportsExceptionInfoRequest?: boolean };
+        }) => {
+          const state = stateOf(session.id);
+          if (message.type === 'response' && message.command === 'initialize') {
+            state.supportsExceptionInfo = message.body?.supportsExceptionInfoRequest === true;
+          } else if (message.type === 'event' && message.event === 'stopped' && message.body) {
+            state.stop = { ...message.body };
+          } else if (message.type === 'event' && message.event === 'continued') {
+            state.stop = undefined;
+          }
+        },
+      }),
+    }),
+    vscode.debug.onDidTerminateDebugSession(session => sessions.delete(session.id)),
     vscode.commands.registerCommand('pathfinder.setApiKey', () => setApiKey(context)),
     vscode.commands.registerCommand('pathfinder.clearApiKey', () => clearApiKey(context)),
     // A new pause makes an explanation in progress out of date.

@@ -2,6 +2,7 @@
   "name": "pathfinder",
   "displayName": "PathFinder",
   "description": "Right-click a function to see every call path that leads to it.",
+  "publisher": "pathfinder-team-stormhacks",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.85.0"
@@ -24,6 +25,11 @@
           "enumDescriptions": ["Claude (Anthropic)", "ChatGPT (OpenAI)", "Gemini (Google)"],
           "default": "claude",
           "description": "Which AI \"Explain Current Path\" uses. Optional feature: set a key with \"PathFinder: Set AI API Key\"."
+        },
+        "pathfinder.openGraphOnCrash": {
+          "type": "boolean",
+          "default": true,
+          "description": "When the debugger stops because of an exception or crash, open the PathFind graph for the crashing function and highlight how the program got there."
         },
         "pathfinder.explain.model": {
           "type": "string",
