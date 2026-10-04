@@ -5,7 +5,9 @@
 export interface DebugCase {
   name: string;
   target: { file: string; lineContains: string; symbol: string }; // where PathFind is run
-  breakpoint: { file: string; lineContains: string };              // a line inside the target's body
+  breakpoint?: { file: string; lineContains: string };             // a line inside the target's body; none = run until it stops by itself
+  stopReasons?: string[];                                          // why the debugger stopped each time (DAP 'stopped' reason), if checked
+  autoOpen?: string;                                               // the crash must open the panel by itself, with this function as its target
   stops: string[][];                                               // expected paths, one per breakpoint hit
   hotCounts: Record<string, number>;                               // calls per function so far, at the last stop
   promptMentions: string[];                                        // text the AI explanation prompt must contain at stop 1
@@ -39,6 +41,17 @@ const recursionStops = (rec: string, main: string, outer: string[] = []) => [
   [...outer, `${main}::main`, `${rec}::is_even`, `${rec}::is_odd`, `${rec}::is_even`, `${rec}::is_odd`, `${rec}::is_even`, `${rec}::leaf`],
   [...outer, `${main}::main`, ...Array(3).fill([`${rec}::step_a`, `${rec}::step_b`, `${rec}::step_c`]).flat(), `${rec}::leaf`],
 ];
+
+// test9: main -> add_user -> load_record -> parse_age works; main -> import_all -> load_record -> parse_age crashes on
+// the second imported row. No breakpoint: the debugger must stop by itself, because of the crash, on the import path.
+const crashStops = (ext: string, outer: string[] = []) => [[
+  ...outer, `main.${ext}::main`, `importer.${ext}::import_all`, `records.${ext}::load_record`, `validate.${ext}::parse_age`,
+]];
+// parse_age ran for "31", "42" and then the bad row.
+const crashCounts = (ext: string, outer: Record<string, number> = {}) => ({
+  ...outer, [`main.${ext}::main`]: 1, [`admin.${ext}::add_user`]: 1, [`importer.${ext}::import_all`]: 1,
+  [`records.${ext}::load_record`]: 3, [`validate.${ext}::parse_age`]: 3,
+});
 
 export const DEBUG_CASES: Record<string, DebugCase[]> = {
   test1: [{
@@ -80,5 +93,32 @@ export const DEBUG_CASES: Record<string, DebugCase[]> = {
     stops: recursionStops('recursion.py', 'main.py', ['main.py::<module>']),
     promptMentions: recursionPrompt,
     hotCounts: recursionCounts('recursion.py', 'main.py', { 'main.py::<module>': 1 }),
+  }],
+  'test9/python': [{
+    name: 'python (debugpy): uncaught ValueError stops on the crashing path',
+    target: { file: 'validate.py', lineContains: 'def parse_age', symbol: 'parse_age' },
+    stopReasons: ['exception'],
+    autoOpen: 'validate.py::parse_age',
+    stops: crashStops('py', ['main.py::<module>']),
+    promptMentions: ['-> ', 'ValueError: invalid literal', "text (str) = 'abc'"],
+    hotCounts: crashCounts('py', { 'main.py::<module>': 1 }),
+  }],
+  'test9/c': [{
+    name: 'C (gdb): segfault stops on the crashing path',
+    target: { file: 'validate.c', lineContains: 'int parse_age', symbol: 'parse_age' },
+    stopReasons: ['exception'],
+    autoOpen: 'validate.c::parse_age',
+    stops: crashStops('c'),
+    promptMentions: ['-> ', 'Segmentation fault', 'age_text (const char *) = 0x0'],
+    hotCounts: crashCounts('c'),
+  }],
+  'test9/cpp': [{
+    name: 'C++ (gdb): uncaught std::invalid_argument stops on the crashing path',
+    target: { file: 'validate.cpp', lineContains: 'int parse_age', symbol: 'parse_age' },
+    stopReasons: ['exception'],
+    autoOpen: 'validate.cpp::parse_age',
+    stops: crashStops('cpp'),
+    promptMentions: ['-> ', 'Aborted', 'std::__throw_invalid_argument', 'stoi'],
+    hotCounts: crashCounts('cpp'),
   }],
 };

@@ -2,10 +2,12 @@ import * as vscode from 'vscode';
 import { buildCallGraph } from './graphBuilder';
 import { registerGraphRendererTestCommands } from './test/graphRendererTest';
 import { PathFindPanel } from './webview/PathFindPanel';
+import type { GraphData } from './types';
 import { registerDebugTracker } from './debugTracker';
 import { registerHotPathCounting } from './hotPath'; // hot-path counting
 import { registerGdbHotPathCounting } from './hotPathGdb'; // hot-path counting for C/C++
 import { registerExplainPath } from './explainPath'; // optional AI explanation of the live path
+import { registerCrashGraph } from './crashGraph'; // open the graph on a crash
 import { registerBreakpointMarkers } from './breakpoints'; // breakpoint markers
 import { registerSessionHistory } from './sessionHistory'; // session history
 
@@ -47,6 +49,15 @@ export function activate(context: vscode.ExtensionContext) {
   };
   // --- end click-to-code feature ---
 
+  /** Shows a graph in the panel (creating it if needed), with click-to-code attached. */
+  const openGraph = (graph: GraphData) => {
+    const panel = PathFindPanel.createOrShow(context.extensionUri);
+    attachClickToCode(panel);
+    panel.renderGraph(graph);
+    return panel;
+  };
+  registerCrashGraph(context, openGraph);
+
   context.subscriptions.push(output, vscode.commands.registerCommand('pathfinder.pathFind', async () => {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -60,10 +71,7 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showWarningMessage("PathFinder: no function at the cursor. Right-click a function's name or a call to it. (If you just opened this folder, the language server may still be loading.)");
       return;
     }
-    // TODO: hand `graph` to the webview once rendering lands; JSON dumclp for now.
-    const panel = PathFindPanel.createOrShow(context.extensionUri);
-    attachClickToCode(panel);
-    panel.renderGraph(graph);
+    openGraph(graph);
 
     output.clear();
     output.appendLine(JSON.stringify(graph, null, 2));

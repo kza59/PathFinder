@@ -61,7 +61,7 @@ export type SessionHistoryMessage =
 export type GraphMessage =
   | { type: 'graph'; graph: GraphData }
   | { type: 'callerPreviews'; previews: Record<string, CallerExpansionPreview> }
-  | { type: 'debugPath'; path: DebugPath }
+  | { type: 'debugPath'; path: DebugPath; crashed?: boolean } // crashed: the program stopped because of an exception
   | { type: 'debugClear' }
   | { type: 'hotCounts'; counts: HotCounts } // hot-path counting
   | { type: 'callValues'; values: CallValues } // call values feature

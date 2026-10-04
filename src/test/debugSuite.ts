@@ -8,6 +8,7 @@ import { buildCallGraph, CallGraph } from '../graphBuilder';
 import { explanationPrompt } from '../explainPath';
 import { DIR_CONFIG_KEY, HotFunction, mapHotCounts } from '../hotPath';
 import { makeNodeId } from '../nodeId';
+import { PathFindPanel } from '../webview/PathFindPanel';
 import { DebugCase, DEBUG_CASES } from './debugCases';
 
 const GRAPH_TIMEOUT_MS = 90_000;   // language servers index lazily
@@ -74,14 +75,20 @@ async function runCase(root: string, c: DebugCase): Promise<boolean> {
   }
   const nodeIds = new Set(graph.nodes.map(n => n.id));
 
-  const { doc, line } = await lineOf(root, c.breakpoint.file, c.breakpoint.lineContains);
-  const breakpoint = new vscode.SourceBreakpoint(new vscode.Location(doc.uri, new vscode.Position(line, 0)));
-  vscode.debug.addBreakpoints([breakpoint]);
+  const breakpoints: vscode.Breakpoint[] = [];
+  if (c.breakpoint) {
+    const { doc, line } = await lineOf(root, c.breakpoint.file, c.breakpoint.lineContains);
+    breakpoints.push(new vscode.SourceBreakpoint(new vscode.Location(doc.uri, new vscode.Position(line, 0))));
+    vscode.debug.addBreakpoints(breakpoints);
+  }
 
   // At each stop: record the resolved path once the whole stack has arrived, then continue.
   const stops: string[][] = [];
   const counts: Record<string, number>[] = [];
   const prompts: string[] = [];
+  const reasons: string[] = [];
+  // What the panel showed at the crash, when the case expects it to open by itself.
+  let panelAtCrash: { targetIds: string[]; path: string[]; crashed: boolean } | undefined;
   let countsDir: string | undefined;
   const started = vscode.debug.onDidStartDebugSession(session => {
     const dir: unknown = session.configuration[DIR_CONFIG_KEY];
@@ -91,18 +98,33 @@ async function runCase(root: string, c: DebugCase): Promise<boolean> {
   // fetches it (it fetches the top frame first and the rest later, sometimes much later for debugpy).
   const tracker = vscode.debug.registerDebugAdapterTrackerFactory('*', {
     createDebugAdapterTracker: session => ({
-      onDidSendMessage: (message: { type?: string; event?: string; body?: { threadId?: number } }) => {
+      onDidSendMessage: (message: { type?: string; event?: string; body?: { threadId?: number; reason?: string; text?: string; description?: string } }) => {
         if (message.type !== 'event' || message.event !== 'stopped') {
           return;
         }
+        reasons.push(message.body?.reason ?? '(none)');
         const threadId = message.body?.threadId;
+        const stopBody = { ...message.body };
         setTimeout(async () => {
           try {
             const reply = await session.customRequest('stackTrace', { threadId, startFrame: 0, levels: 500 });
             stops.push(resolveDebugPath(reply.stackFrames ?? [], graph));
-            prompts.push(await explanationPrompt(session, graph).catch(err => `prompt failed: ${err}`));
+            prompts.push(await explanationPrompt(session, graph, { reason: 'none', ...stopBody })
+              .catch(err => `prompt failed: ${err}`));
             await sleep(COUNTS_MS);
             counts.push(mapHotCounts(readCounts(countsDir), graph).counts);
+            if (c.autoOpen && stopBody.reason === 'exception') {
+              const started = Date.now();
+              while (!PathFindPanel.currentPanel?.isCrashed && Date.now() - started < GRAPH_TIMEOUT_MS) {
+                await sleep(250);
+              }
+              const panel = PathFindPanel.currentPanel;
+              panelAtCrash = panel && {
+                targetIds: panel.currentGraph?.targetIds ?? [],
+                path: panel.currentDebugPath.filter(id => panel.currentGraph?.nodes.some(n => n.id === id)),
+                crashed: panel.isCrashed,
+              };
+            }
           } finally {
             void vscode.commands.executeCommand('workbench.action.debug.continue');
           }
@@ -124,7 +146,7 @@ async function runCase(root: string, c: DebugCase): Promise<boolean> {
   } finally {
     tracker.dispose();
     started.dispose();
-    vscode.debug.removeBreakpoints([breakpoint]);
+    vscode.debug.removeBreakpoints(breakpoints);
     await vscode.debug.stopDebugging();
   }
 
@@ -147,6 +169,21 @@ async function runCase(root: string, c: DebugCase): Promise<boolean> {
   const lastCounts = counts[counts.length - 1];
   if (sorted(lastCounts ?? {}) !== sorted(expectedCounts)) {
     problems.push(`call counts at the last stop: expected ${countsText(expectedCounts)}; got ${countsText(lastCounts)}`);
+  }
+  if (c.stopReasons && JSON.stringify(reasons) !== JSON.stringify(c.stopReasons)) {
+    problems.push(`stop reasons: expected ${c.stopReasons.join(', ')}; got ${reasons.join(', ') || '(no stops)'}`);
+  }
+  // The exception line must appear exactly when the program stopped because of an exception.
+  const crashed = reasons[0] === 'exception';
+  if (prompts[0] !== undefined && prompts[0].includes('stopped because of an exception') !== crashed) {
+    problems.push(`explanation prompt at stop 1 ${crashed ? 'is missing' : 'should not have'} the exception line`);
+  }
+  if (c.autoOpen) {
+    const want = { targetIds: [abs(c.autoOpen)], path: expected[0], crashed: true };
+    if (JSON.stringify(panelAtCrash) !== JSON.stringify(want)) {
+      const show = (v: unknown) => JSON.stringify(v)?.split(root + '/').join('') ?? 'no panel opened';
+      problems.push(`panel at the crash: expected ${show(want)}; got ${show(panelAtCrash)}`);
+    }
   }
   const missing = c.promptMentions.filter(text => !(prompts[0] ?? '').includes(text));
   if (missing.length) {

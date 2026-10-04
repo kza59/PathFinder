@@ -154,6 +154,22 @@ const defaultDepthCutoff = {
   chokepoints: Array.from({ length: DEFAULT_MAX_DEPTH - 1 }, (_, i) => chainId(i + 1)),
 };
 
+// test9: parse_age is reached through add_user (works) and import_all (crashes); every path goes through load_record.
+// Same line layout in C and C++, except C++'s main calls import_all on line 7 (C: 8).
+const crashGraph = (ext: string, mainImportLine: number, importerLine: number, extra: { nodes?: string[]; edges?: ExpectedEdge[] } = {}) => ({
+  nodes: [`validate.${ext}::parse_age`, `records.${ext}::load_record`, `admin.${ext}::add_user`,
+    `importer.${ext}::import_all`, `main.${ext}::main`, ...(extra.nodes ?? [])],
+  edges: [
+    [`records.${ext}::load_record`, `validate.${ext}::parse_age`, [6]],
+    [`admin.${ext}::add_user`, `records.${ext}::load_record`, [ext === 'py' ? 5 : 6]],
+    [`importer.${ext}::import_all`, `records.${ext}::load_record`, [importerLine]],
+    [`main.${ext}::main`, `admin.${ext}::add_user`, [6]],
+    [`main.${ext}::main`, `importer.${ext}::import_all`, [mainImportLine]],
+    ...(extra.edges ?? []),
+  ] as ExpectedEdge[],
+  chokepoints: [`records.${ext}::load_record`],
+});
+
 export const CASES: Record<string, Case[]> = {
   test1: [
     { name: 'python: definition', file: 'sum.py', lineContains: 'def sum', symbol: 'sum', ...pyGraph },
@@ -366,5 +382,24 @@ export const CASES: Record<string, Case[]> = {
   'test6': [
     { name: 'python search fixture: definition', file: 'sum.py', lineContains: 'def sum', symbol: 'sum', ...searchGraph },
     { name: 'python search fixture: call site', file: 'helpers.py', lineContains: 'return sum(value, 1)', symbol: 'sum', ...searchGraph },
+  ],
+  'test9/python': [
+    {
+      name: 'exception fixture (python): both routes to parse_age, load_record is the chokepoint',
+      file: 'validate.py', lineContains: 'def parse_age', symbol: 'parse_age',
+      ...crashGraph('py', 7, 7, { nodes: ['main.py::<module>'], edges: [['main.py::<module>', 'main.py::main', [11]]] }),
+    },
+  ],
+  'test9/c': [
+    {
+      name: 'exception fixture (C): both routes to parse_age, load_record is the chokepoint',
+      file: 'validate.c', lineContains: 'int parse_age', symbol: 'parse_age', ...crashGraph('c', 8, 8),
+    },
+  ],
+  'test9/cpp': [
+    {
+      name: 'exception fixture (C++): both routes to parse_age, load_record is the chokepoint',
+      file: 'validate.cpp', lineContains: 'int parse_age', symbol: 'parse_age', ...crashGraph('cpp', 7, 8),
+    },
   ],
 };

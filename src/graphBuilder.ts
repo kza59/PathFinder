@@ -383,6 +383,30 @@ async function itemForNode(node: GraphNode): Promise<vscode.CallHierarchyItem | 
   return items.find(i => i.selectionRange.start.line === node.line - 1) ?? items[0];
 }
 
+const FUNCTION_KINDS = new Set([vscode.SymbolKind.Function, vscode.SymbolKind.Method, vscode.SymbolKind.Constructor]);
+
+/**
+ * Where the name of the innermost function containing `line` (0-based) is, for running PathFind from any line inside
+ * a function (e.g. where a debugger stopped). Undefined when the line isn't inside a function (top-level code).
+ */
+export async function enclosingFunctionPosition(uri: vscode.Uri, line: number): Promise<vscode.Position | undefined> {
+  const symbols = (await vscode.commands.executeCommand<(vscode.DocumentSymbol | vscode.SymbolInformation)[]>(
+    'vscode.executeDocumentSymbolProvider', uri) ?? []).filter((s): s is vscode.DocumentSymbol => 'children' in s);
+  let found: vscode.DocumentSymbol | undefined;
+  const visit = (list: vscode.DocumentSymbol[]) => {
+    for (const symbol of list) {
+      if (symbol.range.start.line <= line && line <= symbol.range.end.line) {
+        if (FUNCTION_KINDS.has(symbol.kind)) {
+          found = symbol; // keep descending: a nested function is more specific
+        }
+        visit(symbol.children);
+      }
+    }
+  };
+  visit(symbols);
+  return found?.selectionRange.start;
+}
+
 /**
  * Builds the "how did we get here" graph for the function at `position`:
  * the function itself plus every transitive caller, with edges pointing caller -> callee.
