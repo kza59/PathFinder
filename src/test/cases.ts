@@ -1,6 +1,8 @@
 // Expected call graphs for each fixture folder. Ids are written relative to the fixture folder for
 // readability; suite.ts expands them to the real absolute-path ids before comparing.
 
+import { DEFAULT_MAX_DEPTH } from '../limits';
+
 /** [caller id, callee id, 1-based lines in the caller's file where the call happens] */
 export type ExpectedEdge = [string, string, number[]];
 
@@ -12,6 +14,9 @@ export interface Case {
   nodes: string[];
   edges: ExpectedEdge[];
   recursionGroups?: string[][]; // node ids that form each recursive structure; omitted = no recursion expected
+  options?: { maxDepth?: number; maxNodes?: number }; // build limits, to exercise truncation
+  hiddenCallers?: Record<string, number>; // node id -> callers left out; omitted = graph expected complete
+  expand?: string[]; // node ids passed to expandCallers in order after building, before comparing
 }
 
 interface ReadmeLines {
@@ -41,6 +46,17 @@ const pyGraph = readmeGraph('py',
 const cLines: ReadmeLines = { f1Sum: 6, f2Sum: 8, f3Sum: 12, f2F1: 7, f3F1: [11, 13], f3F2: 10, mainF2: 5 };
 const cGraph = readmeGraph('c', cLines);
 const cppGraph = readmeGraph('cpp', cLines);
+
+/**
+ * The README graph cut off one level above the target (maxDepth 1, or a node limit that fits exactly those nodes):
+ * sum and its three direct callers, with the edges between them, and only function2 marked, since its caller
+ * main was left out. function1's callers (function2, function3) are all in the graph, so it is not marked.
+ */
+const oneLevel = (g: ReturnType<typeof readmeGraph>, ext: string) => ({
+  nodes: g.nodes.slice(0, 4),
+  edges: g.edges.slice(0, 6),
+  hiddenCallers: { [`function2.${ext}::function2`]: 1 },
+});
 
 // Same three recursive shapes in both languages: a function calling itself (countdown), two calling each
 // other (is_even <-> is_odd), and a three-function loop (step_a -> step_b -> step_c -> step_a).
@@ -76,16 +92,63 @@ const pyRecursion = recursionGraph('recursion.py', 'main.py',
 const cRecursion = recursionGraph('recursion.c', 'main.c',
   { countdownLeaf: 11, countdownSelf: 12, evenLeaf: 18, oddLeaf: 25, evenOdd: 19, oddEven: 26, cLeaf: 42, ab: 31, bc: 36, ca: 43 });
 
+// test6: level20 -> level19 -> ... -> level1 -> target, deeper than the default depth limit. levelK is defined on
+// line 4K+1 and makes its call on line 4K+2. With default settings the graph stops DEFAULT_MAX_DEPTH levels up,
+// and that last level is marked +1 for the caller just beyond it.
+const chainId = (k: number) => k === 0 ? 'chain.py::target' : `chain.py::level${k}`;
+const chain = (levels: number) => ({
+  nodes: Array.from({ length: levels + 1 }, (_, k) => chainId(k)),
+  edges: Array.from({ length: levels }, (_, i) => [chainId(i + 1), chainId(i), [4 * (i + 1) + 2]]) as ExpectedEdge[],
+});
+const defaultDepthCutoff = {
+  nodes: Array.from({ length: DEFAULT_MAX_DEPTH + 1 }, (_, k) => chainId(k)),
+  edges: Array.from({ length: DEFAULT_MAX_DEPTH }, (_, i) => [chainId(i + 1), chainId(i), [4 * (i + 1) + 2]]) as ExpectedEdge[],
+  hiddenCallers: { [chainId(DEFAULT_MAX_DEPTH)]: 1 },
+};
+
 export const CASES: Record<string, Case[]> = {
   test1: [
     { name: 'python: definition', file: 'sum.py', lineContains: 'def sum', symbol: 'sum', ...pyGraph },
     { name: 'python: call site', file: 'function1.py', lineContains: 'sum(1, 2)', symbol: 'sum', ...pyGraph },
+    {
+      name: 'python truncation: depth limit 1 marks only function2', file: 'sum.py', lineContains: 'def sum', symbol: 'sum',
+      options: { maxDepth: 1 }, ...oneLevel(pyGraph, 'py'),
+    },
+    {
+      name: 'python truncation: node limit 4 marks only function2', file: 'sum.py', lineContains: 'def sum', symbol: 'sum',
+      options: { maxNodes: 4 }, ...oneLevel(pyGraph, 'py'),
+    },
+    {
+      name: 'python truncation: node limit 1 keeps the target with 3 hidden callers', file: 'sum.py', lineContains: 'def sum', symbol: 'sum',
+      options: { maxNodes: 1 }, nodes: ['sum.py::sum'], edges: [], hiddenCallers: { 'sum.py::sum': 3 },
+    },
+    {
+      name: 'python expand: function2 gains main, and main is marked for <module>', file: 'sum.py', lineContains: 'def sum', symbol: 'sum',
+      options: { maxDepth: 1 }, expand: ['function2.py::function2'],
+      nodes: [...pyGraph.nodes.slice(0, 5)],
+      edges: [...pyGraph.edges.slice(0, 7)],
+      hiddenCallers: { 'main.py::main': 1 },
+    },
   ],
   test2: [
     { name: 'C: definition', file: 'sum.c', lineContains: 'int sum', symbol: 'sum', ...cGraph },
     { name: 'C: prototype in header', file: 'sum.h', lineContains: 'int sum', symbol: 'sum', ...cGraph },
     { name: 'C: forward declaration', file: 'function3.c', lineContains: 'int sum', symbol: 'sum', ...cGraph },
     { name: 'C: call site', file: 'function1.c', lineContains: 'sum(1, 2)', symbol: 'sum', ...cGraph },
+    {
+      name: 'C truncation: depth limit 1 marks only function2', file: 'sum.c', lineContains: 'int sum', symbol: 'sum',
+      options: { maxDepth: 1 }, ...oneLevel(cGraph, 'c'),
+    },
+    {
+      // function3 calls function1 twice; each call site is reported separately, but it is one hidden caller.
+      name: 'C truncation: node limit 1 counts each hidden caller once', file: 'sum.c', lineContains: 'int sum', symbol: 'sum',
+      options: { maxNodes: 1 }, nodes: ['sum.c::sum'], edges: [], hiddenCallers: { 'sum.c::sum': 3 },
+    },
+    {
+      // Unlike Python there is no <module> caller above main, so the expanded graph is complete.
+      name: 'C expand: function2 gains main and the graph is complete', file: 'sum.c', lineContains: 'int sum', symbol: 'sum',
+      options: { maxDepth: 1 }, expand: ['function2.c::function2'], ...cGraph,
+    },
   ],
   test3: [
     { name: 'C++: definition', file: 'sum.cpp', lineContains: 'int sum', symbol: 'sum', ...cppGraph },
@@ -142,6 +205,28 @@ export const CASES: Record<string, Case[]> = {
     },
   ],
   'test5/python': [
+    {
+      // At depth 1, countdown and is_even are both missing main. Expanding countdown brings main in, so is_even's
+      // marker must be refreshed: it gets the main -> is_even edge and loses its marker. step_c keeps its own.
+      name: 'python expand: a caller two marked nodes were missing joins, and both are updated',
+      file: 'recursion.py', lineContains: 'def leaf', symbol: 'leaf',
+      options: { maxDepth: 1 }, expand: ['recursion.py::countdown'],
+      nodes: ['recursion.py::leaf', 'recursion.py::countdown', 'recursion.py::is_even', 'recursion.py::is_odd',
+        'recursion.py::step_c', 'main.py::main'],
+      edges: [
+        ['recursion.py::countdown', 'recursion.py::leaf', [7]],
+        ['recursion.py::countdown', 'recursion.py::countdown', [8]],
+        ['recursion.py::is_even', 'recursion.py::leaf', [13]],
+        ['recursion.py::is_odd', 'recursion.py::leaf', [19]],
+        ['recursion.py::is_even', 'recursion.py::is_odd', [14]],
+        ['recursion.py::is_odd', 'recursion.py::is_even', [20]],
+        ['recursion.py::step_c', 'recursion.py::leaf', [33]],
+        ['main.py::main', 'recursion.py::countdown', [5]],
+        ['main.py::main', 'recursion.py::is_even', [6]],
+      ],
+      recursionGroups: [['recursion.py::countdown'], ['recursion.py::is_even', 'recursion.py::is_odd']],
+      hiddenCallers: { 'recursion.py::step_c': 1, 'main.py::main': 1 },
+    },
     { name: 'python recursion: all three shapes reach leaf', file: 'recursion.py', lineContains: 'def leaf', symbol: 'leaf', ...pyRecursion },
     {
       name: 'python recursion: the right-clicked function is itself recursive', file: 'recursion.py', lineContains: 'def countdown', symbol: 'countdown',
@@ -152,6 +237,26 @@ export const CASES: Record<string, Case[]> = {
         ['main.py::<module>', 'main.py::main', [11]],
       ],
       recursionGroups: [['recursion.py::countdown']],
+    },
+  ],
+  'test6/python': [
+    {
+      name: `deep chain: default depth limit stops at level${DEFAULT_MAX_DEPTH}, marked +1`, file: 'chain.py', lineContains: 'def target', symbol: 'target',
+      ...defaultDepthCutoff,
+    },
+    {
+      name: 'deep chain: expanding the marked node loads the next levels and moves the marker up',
+      file: 'chain.py', lineContains: 'def target', symbol: 'target',
+      expand: [chainId(DEFAULT_MAX_DEPTH)],
+      ...chain(2 * DEFAULT_MAX_DEPTH),
+      hiddenCallers: { [chainId(2 * DEFAULT_MAX_DEPTH)]: 1 },
+    },
+    {
+      name: 'deep chain: expanding again reaches main and the graph is complete',
+      file: 'chain.py', lineContains: 'def target', symbol: 'target',
+      expand: [chainId(DEFAULT_MAX_DEPTH), chainId(2 * DEFAULT_MAX_DEPTH)],
+      nodes: [...chain(20).nodes, 'main.py::main', 'main.py::<module>'],
+      edges: [...chain(20).edges, ['main.py::main', chainId(20), [5]], ['main.py::<module>', 'main.py::main', [9]]],
     },
   ],
   'test5/c': [

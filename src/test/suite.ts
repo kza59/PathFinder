@@ -2,7 +2,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { buildCallGraph, CallGraph, findNodeForFrame } from '../graphBuilder';
+import { buildCallGraph, CallGraph, expandCallers, findNodeForFrame } from '../graphBuilder';
 import { makeNodeId } from '../nodeId';
 import { Case, CASES } from './cases';
 
@@ -32,7 +32,7 @@ function recursionGroups(members: (readonly [string, number | undefined])[]): st
 
 function describe(graph: CallGraph | undefined) {
   return {
-    nodes: (graph?.nodes.map(n => n.id) ?? []).sort(),
+    nodes: (graph?.nodes.map(n => `${n.id}${n.hiddenCallers ? ` (+${n.hiddenCallers} hidden)` : ''}`) ?? []).sort(),
     edges: (graph?.edges.map(e => `${e.from} -> ${e.to} @ ${e.lines.join(',')}${e.recursive ? ' (recursive)' : ''}`) ?? []).sort(),
     recursionGroups: recursionGroups(graph?.nodes.map(n => [n.id, n.recursionGroup] as const) ?? []),
   };
@@ -50,7 +50,7 @@ async function runCase(root: string, c: Case): Promise<boolean> {
     return makeNodeId(path.join(root, id.slice(0, split)), id.slice(split + 2));
   };
   const expected = JSON.stringify({
-    nodes: c.nodes.map(abs).sort(),
+    nodes: c.nodes.map(id => `${abs(id)}${c.hiddenCallers?.[id] ? ` (+${c.hiddenCallers[id]} hidden)` : ''}`).sort(),
     edges: c.edges.map(([f, t, lines]) => {
       // An edge is recursive exactly when both ends are in the same expected group.
       const recursive = (c.recursionGroups ?? []).some(g => g.includes(f) && g.includes(t));
@@ -64,14 +64,17 @@ async function runCase(root: string, c: Case): Promise<boolean> {
     let found = 0;
     let graph: CallGraph | undefined;
     try {
-      graph = await buildCallGraph(doc.uri, position);
+      graph = await buildCallGraph(doc.uri, position, c.options);
+      for (const id of c.expand ?? []) {
+        graph = graph && await expandCallers(graph, abs(id), c.options);
+      }
       found = graph?.nodes.length ?? 0;
       actual = JSON.stringify(describe(graph));
     } catch (err) {
       actual = `threw ${err instanceof Error ? err.message : err}`; // language server not ready yet
     }
     if (actual === expected) {
-      if (path.basename(root) === 'test1' && graph) {
+      if (path.basename(root) === 'test1' && graph && !c.options) { // truncated graphs leave main out on purpose
         // Runtime frames stop on executable body lines, not just declarations.
         for (const [file, line, label] of [
           ['main.py', 5, 'main'], ['function2.py', 6, 'function2'],
@@ -94,7 +97,7 @@ async function runCase(root: string, c: Case): Promise<boolean> {
     await new Promise(r => setTimeout(r, RETRY_MS));
   }
   log(`  FAIL  ${c.name}\n    expected: ${expected}\n    actual:   ${actual}\n    trace:`);
-  await buildCallGraph(doc.uri, position, { trace: message => log(`      ${message}`) }).catch(err => log(`      threw ${err}`));
+  await buildCallGraph(doc.uri, position, { ...c.options, trace: message => log(`      ${message}`) }).catch(err => log(`      threw ${err}`));
   return false;
 }
 
