@@ -1,12 +1,12 @@
-import cytoscape, { type Core, type ElementDefinition, type NodeSingular, type StylesheetJson } from 'cytoscape';
-import fcose from 'cytoscape-fcose';
+import cytoscape, { type Core, type ElementDefinition, type Layouts, type NodeSingular, type StylesheetJson } from 'cytoscape';
+import cola from 'cytoscape-cola';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
 import type { DebugPath, GraphData, GraphMessage, GraphNode, WebviewMessage } from '../src/types';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
 
-cytoscape.use(fcose);
+cytoscape.use(cola);
 
 type LayoutMode = 'trace' | 'explore';
 
@@ -151,6 +151,7 @@ export class GraphRenderer {
   private path: DebugPath = [];
   private hoveredId: string | undefined;
   private mode: LayoutMode = 'trace';
+  private exploreLayout?: Layouts;
   private staticPositions = new Map<string, { x: number; y: number }>();
   public layout: TargetLayout | undefined;
 
@@ -173,6 +174,7 @@ export class GraphRenderer {
   }
 
   private applyLayoutMode(): void {
+    this.stopExploreLayout();
     this.cy.autoungrabify(this.mode === 'trace');
 
     const nodes = this.cy.nodes();
@@ -181,44 +183,7 @@ export class GraphRenderer {
     if (!nodes.length) return;
 
     if (this.mode === 'explore') {
-      const options: fcose.FcoseLayoutOptions = {
-        name: 'fcose',
-
-        quality: 'proof',
-        randomize: false,
-
-        // Show the force relaxation
-        animate: true,
-        animationDuration: 800,
-
-        fit: true,
-        padding: layoutOptions.padding,
-
-        // Prevent nodes / labels from crowding each other
-        nodeDimensionsIncludeLabels: true,
-        nodeSeparation: 60,
-
-        // Push nodes away from each other
-        nodeRepulsion: 12000,
-
-        // But keep connected nodes relatively close
-        idealEdgeLength: 90,
-        edgeElasticity: 0.45,
-
-        // Pull the whole graph toward the center
-        gravity: 0.7,
-        gravityRange: 3,
-
-        // Let incremental layout move further away
-        // from the original static positions
-        initialEnergyOnIncremental: 0.5,
-
-        numIter: 2500,
-
-        packComponents: true,
-      };
-
-      this.cy.layout(options).run();
+      this.startExploreLayout();
     } else {
       this.cy.layout({
         ...layoutOptions,
@@ -231,7 +196,36 @@ export class GraphRenderer {
     }
   }
 
+  private startExploreLayout(): void {
+    const options = {
+      name: 'cola',
+      animate: true,
+      refresh: 1,
+      randomize: false,
+      avoidOverlap: true,
+      nodeDimensionsIncludeLabels: true,
+      nodeSpacing: () => 30,
+      edgeLength: () => 100,
+      ungrabifyWhileSimulating: false,
+      fit: false,
+      centerGraph: false,
+      infinite: true,
+    };
+    this.exploreLayout = this.cy.layout(options);
+    this.exploreLayout.run();
+  }
+
+  private stopExploreLayout(): void {
+    this.exploreLayout?.stop();
+    this.exploreLayout = undefined;
+  }
+
+  public dispose(): void {
+    this.stopExploreLayout();
+  }
+
   public renderGraph(graph: GraphData): void {
+    this.stopExploreLayout();
     this.hoveredId = undefined;
     this.layout = targetLayout(graph);
     const layout = this.layout;
@@ -576,6 +570,7 @@ export function initializeGraphWebview(): void {
   // --- end breadcrumb feature ---
   window.addEventListener('unload', () => {
     observer.disconnect();
+    renderer.dispose();
     cy.destroy();
   });
   vscode.postMessage({ type: 'ready' });

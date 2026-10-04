@@ -1,5 +1,6 @@
 import * as assert from 'node:assert/strict';
 import cytoscape, { type Core } from 'cytoscape';
+import { advanceAnimationFrames, pendingAnimationFrames } from './animationFrames.test';
 import { GraphRenderer, graphStyles } from './graph';
 import type { GraphData } from '../src/types';
 
@@ -25,18 +26,46 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void][] = [
     }));
     const before = appearance();
     for (let round = 0; round < 2; round++) {
+      cy.zoom(1.2); cy.pan({ x: 51, y: 32 });
+      const pan = { ...cy.pan() }; const zoom = cy.zoom();
       renderer.setLayoutMode('explore');
       assert.equal(renderer.layoutMode, 'explore');
       assert.equal(cy.autoungrabify(), false);
       assert.ok(cy.nodes().toArray().every(node => node.grabbable() && !node.locked()));
+      advanceAnimationFrames(10);
       assert.ok(cy.nodes().toArray().every(node => Number.isFinite(node.position('x')) && Number.isFinite(node.position('y'))));
       assert.notDeepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+      assert.deepEqual(cy.pan(), pan); assert.equal(cy.zoom(), zoom);
       cy.$id('root').position({ x: 999, y: -123 });
       renderer.setLayoutMode('trace');
+      advanceAnimationFrames(10);
       assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
       assert.ok(cy.nodes().toArray().every(node => !node.grabbable()));
       assert.deepEqual(appearance(), before);
+      assert.equal(pendingAnimationFrames(), 0);
     }
+  }],
+  ['continuous Explore responds to dragging and disposal stops physics', (cy, renderer) => {
+    renderer.setLayoutMode('explore');
+    advanceAnimationFrames(100);
+    assert.ok(pendingAnimationFrames() > 0);
+    const neighbor = cy.$id('a');
+    const before = { ...neighbor.position() };
+    const root = cy.$id('root');
+    root.emit('grab');
+    root.position({ x: 999, y: -123 });
+    // Simulate Cytoscape holding the grabbed node while Cola moves its neighbors.
+    root.lock();
+    advanceAnimationFrames(20);
+    assert.notDeepEqual(neighbor.position(), before);
+    assert.deepEqual(root.position(), { x: 999, y: -123 });
+    root.unlock(); root.emit('free');
+    advanceAnimationFrames(10);
+    renderer.dispose();
+    const positions = cy.nodes().map(node => ({ id: node.id(), ...node.position() }));
+    advanceAnimationFrames(10);
+    assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+    assert.equal(pendingAnimationFrames(), 0);
   }],
   ['Explore unlocks entry points and Trace restores their original positions and locks', (cy, renderer) => {
     renderer.renderGraph({
@@ -61,6 +90,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void][] = [
     renderer.setLayoutMode('explore');
     renderer.highlightPath(['root', 'a', 't']);
     renderer.renderGraph({ ...fixture, targetIds: ['root'] });
+    advanceAnimationFrames(10);
     assert.equal(renderer.layoutMode, 'explore');
     assert.ok(cy.nodes().toArray().every(node => node.grabbable() && !node.locked()));
     assert.equal(cy.$id('t').hasClass('current'), true);
@@ -187,7 +217,7 @@ for (const [name, run] of cases) {
     run(cy, renderer);
     console.log(`  PASS  ${name}`);
   } catch (error) { failed++; console.error(`  FAIL  ${name}`, error); }
-  finally { cy.destroy(); }
+  finally { cy.destroy(); advanceAnimationFrames(2); }
 }
 console.log(`\n${cases.length - failed}/${cases.length} renderer tests passed`);
 process.exitCode = failed ? 1 : 0;
