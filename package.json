@@ -55,6 +55,7 @@
     "test:renderer": "tsc -p tsconfig.webview.json && esbuild media/graph.test.ts --bundle --platform=node --outfile=out/test/graphRenderer.unit.js && node out/test/graphRenderer.unit.js"
   },
   "devDependencies": {
+    "@types/cytoscape-fcose": "^2.2.5",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "esbuild": "^0.28.2",
@@ -62,6 +63,7 @@
     "typescript": "^5.4.0"
   },
   "dependencies": {
-    "cytoscape": "^3.34.3"
+    "cytoscape": "^3.34.3",
+    "cytoscape-fcose": "^2.2.0"
   }
 }

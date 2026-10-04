@@ -12,6 +12,71 @@ const fixture: GraphData = {
 const edge = (cy: Core, from: string, to: string) => cy.edges().filter(e => e.source().id() === from && e.target().id() === to);
 
 const cases: [string, (cy: Core, renderer: GraphRenderer) => void][] = [
+  ['Trace disables dragging; Explore moves nodes and Trace restores exact positions and styling', (cy, renderer) => {
+    assert.equal(renderer.layoutMode, 'trace');
+    assert.equal(cy.autoungrabify(), true);
+    assert.ok(cy.nodes().toArray().every(node => !node.grabbable()));
+    renderer.highlightPath(['root', 'a', 't']);
+    cy.$id('a').select();
+    const positions = cy.nodes().map(node => ({ id: node.id(), ...node.position() }));
+    const appearance = () => cy.elements().map(element => ({
+      id: element.id(), classes: element.classes(), selected: element.selected(),
+      opacity: element.style('opacity'),
+    }));
+    const before = appearance();
+    for (let round = 0; round < 2; round++) {
+      renderer.setLayoutMode('explore');
+      assert.equal(renderer.layoutMode, 'explore');
+      assert.equal(cy.autoungrabify(), false);
+      assert.ok(cy.nodes().toArray().every(node => node.grabbable() && !node.locked()));
+      assert.ok(cy.nodes().toArray().every(node => Number.isFinite(node.position('x')) && Number.isFinite(node.position('y'))));
+      assert.notDeepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+      cy.$id('root').position({ x: 999, y: -123 });
+      renderer.setLayoutMode('trace');
+      assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+      assert.ok(cy.nodes().toArray().every(node => !node.grabbable()));
+      assert.deepEqual(appearance(), before);
+    }
+  }],
+  ['Explore unlocks entry points and Trace restores their original positions and locks', (cy, renderer) => {
+    renderer.renderGraph({
+      ...fixture,
+      nodes: [...fixture.nodes, ...['main', '<module>'].map(id => ({ id, label: id, file: `${id}.py`, line: 1, endLine: 2 }))],
+      edges: [...fixture.edges, { from: 'main', to: 't', lines: [] }, { from: '<module>', to: 'main', lines: [] }],
+    });
+    const positions = cy.nodes().map(node => ({ id: node.id(), ...node.position() }));
+    renderer.setLayoutMode('explore');
+    for (const id of ['main', '<module>']) {
+      assert.equal(cy.$id(id).locked(), false);
+      assert.equal(cy.$id(id).grabbable(), true);
+      cy.$id(id).position({ x: 999, y: 999 });
+    }
+    renderer.setLayoutMode('trace');
+    assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+    assert.equal(cy.$id('main').locked(), true);
+    assert.equal(cy.$id('<module>').locked(), true);
+    assert.equal(cy.$id('root').locked(), false);
+  }],
+  ['replacement graphs retain Explore and refresh the saved static positions, including empty and single-node graphs', (cy, renderer) => {
+    renderer.setLayoutMode('explore');
+    renderer.highlightPath(['root', 'a', 't']);
+    renderer.renderGraph({ ...fixture, targetIds: ['root'] });
+    assert.equal(renderer.layoutMode, 'explore');
+    assert.ok(cy.nodes().toArray().every(node => node.grabbable() && !node.locked()));
+    assert.equal(cy.$id('t').hasClass('current'), true);
+    renderer.setLayoutMode('trace');
+    for (const node of cy.nodes()) {
+      assert.deepEqual(node.position(), renderer.layout!.positions.get(node.id()));
+    }
+    renderer.setLayoutMode('explore');
+    renderer.renderGraph({ nodes: [], edges: [], targetIds: [] });
+    renderer.setLayoutMode('trace');
+    renderer.setLayoutMode('explore');
+    renderer.renderGraph({ nodes: [fixture.nodes[0]], edges: [], targetIds: ['root'] });
+    assert.equal(cy.nodes().length, 1);
+    renderer.setLayoutMode('trace');
+    assert.deepEqual(cy.$id('root').position(), renderer.layout!.positions.get('root'));
+  }],
   ['target marker and longest-path rows are rendered without distance labels', (cy, renderer) => {
     assert.equal(cy.$id('t').hasClass('target'), true);
     assert.equal(cy.$id('t').style('label'), 't\nTarget');

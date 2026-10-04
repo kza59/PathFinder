@@ -1,9 +1,14 @@
 import cytoscape, { type Core, type ElementDefinition, type NodeSingular, type StylesheetJson } from 'cytoscape';
+import fcose from 'cytoscape-fcose';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
 import type { DebugPath, GraphData, GraphMessage, GraphNode, WebviewMessage } from '../src/types';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
+
+cytoscape.use(fcose);
+
+type LayoutMode = 'trace' | 'explore';
 
 export const layoutOptions = {
   name: 'preset' as const,
@@ -145,13 +150,86 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
 export class GraphRenderer {
   private path: DebugPath = [];
   private hoveredId: string | undefined;
+  private mode: LayoutMode = 'trace';
+  private staticPositions = new Map<string, { x: number; y: number }>();
   public layout: TargetLayout | undefined;
 
   constructor(
     private readonly cy: Core,
     private readonly graphRendered: (nodeCount: number) => void = () => {},
     private readonly pathChanged: (current: GraphNode | undefined, active: boolean) => void = () => {},
-  ) {}
+  ) {
+    this.cy.autoungrabify(true);
+  }
+
+  public get layoutMode(): LayoutMode {
+    return this.mode;
+  }
+
+  public setLayoutMode(mode: LayoutMode): void {
+    if (this.mode === mode) return;
+    this.mode = mode;
+    this.applyLayoutMode();
+  }
+
+  private applyLayoutMode(): void {
+    this.cy.autoungrabify(this.mode === 'trace');
+
+    const nodes = this.cy.nodes();
+    nodes.unlock();
+
+    if (!nodes.length) return;
+
+    if (this.mode === 'explore') {
+      const options: fcose.FcoseLayoutOptions = {
+        name: 'fcose',
+
+        quality: 'proof',
+        randomize: false,
+
+        // Show the force relaxation
+        animate: true,
+        animationDuration: 800,
+
+        fit: true,
+        padding: layoutOptions.padding,
+
+        // Prevent nodes / labels from crowding each other
+        nodeDimensionsIncludeLabels: true,
+        nodeSeparation: 60,
+
+        // Push nodes away from each other
+        nodeRepulsion: 12000,
+
+        // But keep connected nodes relatively close
+        idealEdgeLength: 90,
+        edgeElasticity: 0.45,
+
+        // Pull the whole graph toward the center
+        gravity: 0.7,
+        gravityRange: 3,
+
+        // Let incremental layout move further away
+        // from the original static positions
+        initialEnergyOnIncremental: 0.5,
+
+        numIter: 2500,
+
+        packComponents: true,
+      };
+
+      this.cy.layout(options).run();
+    } else {
+      this.cy.layout({
+        ...layoutOptions,
+        positions: Object.fromEntries(this.staticPositions),
+      }).run();
+
+      nodes
+        .filter(node => this.layout?.pinnedIds.has(node.id()) ?? false)
+        .lock();
+    }
+  }
 
   public renderGraph(graph: GraphData): void {
     this.hoveredId = undefined;
@@ -194,6 +272,9 @@ export class GraphRenderer {
         ...layoutOptions, positions: Object.fromEntries(layout.positions),
       }).run();
     }
+    // Copy coordinates before Explore can move them or the user can drag nodes.
+    this.staticPositions = new Map(this.cy.nodes().map(node => [node.id(), { ...node.position() }]));
+    if (this.mode === 'explore') this.applyLayoutMode();
     this.highlightPath(this.path);
     this.graphRendered(this.cy.nodes().length);
   }
@@ -285,6 +366,7 @@ export function initializeGraphWebview(): void {
   const layoutLabels = document.getElementById('layout-labels')!;
   const renderLayoutLabels = () => {
     layoutLabels.replaceChildren();
+    if (renderer.layoutMode === 'explore') return;
     const zoom = cy.zoom();
     const pan = cy.pan();
     for (const annotation of renderer.layout?.annotations ?? []) {
@@ -297,6 +379,11 @@ export function initializeGraphWebview(): void {
     }
   };
   cy.on('viewport resize', renderLayoutLabels);
+  const layoutMode = document.getElementById('layout-mode') as HTMLSelectElement;
+  layoutMode.addEventListener('change', () => {
+    renderer.setLayoutMode(layoutMode.value === 'explore' ? 'explore' : 'trace');
+    renderLayoutLabels();
+  });
 
   cy.on('tap', 'node', event => {
     const node = event.target.data() as GraphNode;
