@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import { buildCallGraph, CallGraph, expandCallers, findNodeForFrame } from '../graphBuilder';
 import { makeNodeId } from '../nodeId';
 import { Case, CASES } from './cases';
+import { callerExpansionPreview } from '../webview/callerPreview';
 
 // Language servers index lazily, so retry until the graph is complete. PATHFINDER_TIMEOUT (ms) overrides.
 const TIMEOUT_MS = Number(process.env.PATHFINDER_TIMEOUT) || 120_000;
@@ -69,7 +70,19 @@ async function runCase(root: string, c: Case): Promise<boolean> {
     try {
       graph = await buildCallGraph(doc.uri, position, c.options);
       for (const id of c.expand ?? []) {
-        graph = graph && await expandCallers(graph, abs(id), c.options);
+        if (graph) {
+          const expanded = await expandCallers(graph, abs(id), c.options);
+          if (path.basename(root) === 'test8') {
+            const preview = callerExpansionPreview(graph, expanded);
+            const firstExpansion = id.endsWith('::level8');
+            const expectedNodes = firstExpansion ? 8 : 6;
+            const expectedNoise = firstExpansion ? 0 : 1;
+            if (preview.addedNodes !== expectedNodes || preview.addedNoiseNodes !== expectedNoise) {
+              throw new Error(`Expansion preview for ${id}: expected ${expectedNodes} new functions (${expectedNoise} noise), got ${JSON.stringify(preview)}`);
+            }
+          }
+          graph = expanded;
+        }
       }
       found = graph?.nodes.length ?? 0;
       actual = JSON.stringify(describe(graph));

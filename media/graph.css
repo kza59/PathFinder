@@ -179,6 +179,36 @@ main {
   inset: 0;
 }
 
+#truncation-markers {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+
+#truncation-markers[hidden] { display: none; }
+
+.truncation-marker {
+  position: absolute;
+  transform: translate(-25%, -50%);
+  pointer-events: auto;
+  padding: 2px 6px;
+  min-width: 28px;
+  border: 1px solid var(--vscode-focusBorder, #007fd4);
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.truncation-marker:disabled {
+  cursor: wait;
+  opacity: 0.7;
+  background: var(--vscode-button-background, #0e639c);
+}
+
 #recursion-outlines {
   position: absolute;
   inset: 0;

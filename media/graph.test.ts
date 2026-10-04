@@ -9,6 +9,7 @@ import { CASES } from '../src/test/cases';
 import { DEBUG_CASES } from '../src/test/debugCases';
 import { markRecursion } from '../src/recursion';
 import { recursionAnnouncement, recursionColor, recursionOutlines } from './recursion';
+import { truncationMarkerCases } from './truncationMarkers.test';
 
 const fixture: GraphData = {
   targetIds: ['t'],
@@ -24,6 +25,7 @@ const noiseFixture: GraphData = {
 };
 
 const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void>][] = [
+  ...truncationMarkerCases,
   ...['test5/python', 'test5/c'].map(fixtureName => [
     `${fixtureName}: direct, mutual and three-function recursion display and live depth`,
     (cy: Core, renderer: GraphRenderer) => {
@@ -162,6 +164,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
           id, label: id.split('::')[1], file: id.split('::')[0], line: 1, endLine: 2,
           chokepoint: expected.chokepoints?.includes(id),
           noise: id.endsWith('::<module>'),
+          hiddenCallers: expected.hiddenCallers?.[id],
         })),
         edges: expected.edges.map(([from, to, lines]) => ({ from, to, lines })),
       };

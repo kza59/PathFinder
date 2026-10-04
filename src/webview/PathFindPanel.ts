@@ -1,6 +1,8 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
-import type { CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage } from '../types';
+import { expandCallers } from '../graphBuilder';
+import type { CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage } from '../types';
+import { callerExpansionPreview } from './callerPreview';
 
 export class PathFindPanel implements vscode.Disposable {
   public static currentPanel: PathFindPanel | undefined;
@@ -19,6 +21,9 @@ export class PathFindPanel implements vscode.Disposable {
   private callValues: CallValues = {}; // call values feature
   private ready = false;
   private disposed = false;
+  private expanding = false;
+  private callerExpansions = new Map<string, Promise<GraphData>>();
+  private callerPreviews = new Map<string, CallerExpansionPreview>();
 
   public static createOrShow(extensionUri: vscode.Uri): PathFindPanel {
     if (PathFindPanel.currentPanel) {
@@ -58,6 +63,7 @@ export class PathFindPanel implements vscode.Disposable {
           this.ready = true;
           if (this.graph) {
             this.send({ type: 'graph', graph: this.graph });
+            this.sendCallerPreviews();
           }
           this.sendDebugState();
           // --- hot-path counting ---
@@ -80,6 +86,12 @@ export class PathFindPanel implements vscode.Disposable {
           this.nodeClicked.fire({
             type: 'nodeClicked', id: message.id, file: message.file, line: message.line,
           });
+        } else if (message.type === 'expandCallers' && 'id' in message && typeof message.id === 'string') {
+          void this.expandNodeCallers(message.id);
+        } else if (message.type === 'previewCallers' && 'id' in message && typeof message.id === 'string') {
+          if (this.graph && this.callerPreviews.get(message.id)?.state === 'error') {
+            void this.previewNodeCallers(message.id, this.graph, this.callerExpansions);
+          }
         // --- copy path feature ---
         } else if (message.type === 'copyPath' && 'text' in message && typeof message.text === 'string' && message.text) {
           const text = message.text;
@@ -95,9 +107,84 @@ export class PathFindPanel implements vscode.Disposable {
   }
 
   public renderGraph(graph: GraphData): void {
+    if (this.disposed) return;
     this.graph = graph;
+    // Each preview is tied to this exact render, including re-renders of the same graph object.
+    this.callerExpansions = new Map();
+    this.callerPreviews = new Map(graph.nodes
+      .filter(node => typeof node.hiddenCallers === 'number' && Number.isSafeInteger(node.hiddenCallers) && node.hiddenCallers > 0)
+      .map(node => [node.id, { state: 'loading' }]));
     this.send({ type: 'graph', graph });
+    this.sendCallerPreviews();
     PathFindPanel.graphRendered.fire(this); // hot-path counting
+    void this.prepareCallerPreviews(graph, this.callerExpansions);
+  }
+
+  private sendCallerPreviews(): void {
+    this.send({ type: 'callerPreviews', previews: Object.fromEntries(this.callerPreviews) });
+  }
+
+  private isCurrentPreview(graph: GraphData, cache: Map<string, Promise<GraphData>>): boolean {
+    return !this.disposed && this.graph === graph && this.callerExpansions === cache;
+  }
+
+  private async prepareCallerPreviews(graph: GraphData, cache: Map<string, Promise<GraphData>>): Promise<void> {
+    // Preview one marker at a time to avoid flooding the language server for wide graphs.
+    for (const id of this.callerPreviews.keys()) {
+      if (!this.isCurrentPreview(graph, cache)) return;
+      await this.previewNodeCallers(id, graph, cache);
+    }
+  }
+
+  private async previewNodeCallers(id: string, graph: GraphData, cache: Map<string, Promise<GraphData>>): Promise<void> {
+    if (!this.isCurrentPreview(graph, cache)) return;
+    if (this.callerPreviews.get(id)?.state !== 'loading') {
+      this.callerPreviews.set(id, { state: 'loading' });
+      this.sendCallerPreviews();
+    }
+    try {
+      let expansion = cache.get(id);
+      if (!expansion) {
+        expansion = expandCallers(graph, id);
+        cache.set(id, expansion);
+      }
+      const expanded = await expansion;
+      if (this.isCurrentPreview(graph, cache)) {
+        this.callerPreviews.set(id, callerExpansionPreview(graph, expanded));
+        this.sendCallerPreviews();
+      }
+    } catch {
+      cache.delete(id);
+      if (this.isCurrentPreview(graph, cache)) {
+        this.callerPreviews.set(id, { state: 'error' });
+        this.sendCallerPreviews();
+      }
+    }
+  }
+
+  private async expandNodeCallers(id: string): Promise<void> {
+    const graph = this.graph;
+    const count = graph?.nodes.find(node => node.id === id)?.hiddenCallers;
+    const cache = this.callerExpansions;
+    const expansion = cache.get(id);
+    if (this.disposed || this.expanding || !graph || typeof count !== 'number' || !Number.isSafeInteger(count) || count <= 0) {
+      return;
+    }
+    if (!expansion || this.callerPreviews.get(id)?.state !== 'ready') return;
+    this.expanding = true;
+    try {
+      const expanded = await expansion;
+      // A different PathFind request or a closed panel must not receive this late result.
+      if (this.isCurrentPreview(graph, cache)) {
+        this.renderGraph(expanded);
+      }
+    } catch (error) {
+      if (this.isCurrentPreview(graph, cache)) {
+        void vscode.window.showErrorMessage(`PathFind: could not expand callers (${error instanceof Error ? error.message : String(error)})`);
+      }
+    } finally {
+      this.expanding = false;
+    }
   }
 
   // --- hot-path counting ---
@@ -133,6 +220,8 @@ export class PathFindPanel implements vscode.Disposable {
       return;
     }
     this.disposed = true;
+    this.callerExpansions.clear();
+    this.callerPreviews.clear();
     if (PathFindPanel.currentPanel === this) {
       PathFindPanel.currentPanel = undefined;
     }
@@ -189,6 +278,7 @@ export class PathFindPanel implements vscode.Disposable {
   </header>
   <main>
     <div id="graph" role="img" aria-label="Directed function call graph"></div>
+    <div id="truncation-markers" hidden></div>
     <div id="recursion-outlines" aria-hidden="true" hidden></div>
     <div id="layout-labels" aria-hidden="true"></div>
     <p id="empty">Waiting for graph data…</p>

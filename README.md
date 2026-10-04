@@ -88,3 +88,15 @@ markers; `target` and the top entry should retain their usual styles. Click
 **Where to break** from a zoomed-out view, cycle both ways, and repeat after
 expanding callers. Also check Trace / Explore, light / dark themes, and a graph
 with no chokepoints.
+
+Nodes with omitted callers show a clickable **+N** marker. Click the marker (or
+focus it and press Enter or Space) to load more callers. The number is how many
+additional visible functions that click will reveal. The extension previews and
+caches the next expansion; the marker shows **…** while counting. If counting
+fails, click **Retry** to try again before expanding.
+In `test8`, run **PathFind** on `target` in `chain.py`: `level8` shows **+8**.
+Expanding it adds callers through `level16`, which shows **+5**. Expand again
+to reach `level20` and `main`; the truncation markers disappear. **Show Noise**
+changes the second count to **+6**, including the top-level module node. Counts
+exclude functions already in the graph and may be **+0** if the graph's node cap
+prevents adding functions. Clicking a function still opens its source.

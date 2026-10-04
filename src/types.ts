@@ -33,8 +33,14 @@ export interface CallValue {
 export type CallValues = Record<string, CallValue>;
 // --- end call values feature ---
 
+export type CallerExpansionPreview =
+  | { state: 'loading' }
+  | { state: 'ready'; addedNodes: number; addedNoiseNodes: number }
+  | { state: 'error' };
+
 export type GraphMessage =
   | { type: 'graph'; graph: GraphData }
+  | { type: 'callerPreviews'; previews: Record<string, CallerExpansionPreview> }
   | { type: 'debugPath'; path: DebugPath }
   | { type: 'debugClear' }
   | { type: 'hotCounts'; counts: HotCounts } // hot-path counting
@@ -55,4 +61,14 @@ export interface CopyPathMessage {
 }
 // --- end copy path feature ---
 
-export type WebviewMessage = { type: 'ready' } | NodeClickedMessage | CopyPathMessage;
+export interface ExpandCallersMessage {
+  type: 'expandCallers';
+  id: string;
+}
+
+export interface PreviewCallersMessage {
+  type: 'previewCallers';
+  id: string;
+}
+
+export type WebviewMessage = { type: 'ready' } | NodeClickedMessage | CopyPathMessage | ExpandCallersMessage | PreviewCallersMessage;

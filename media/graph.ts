@@ -1,6 +1,7 @@
 import cytoscape, { type Core, type ElementDefinition, type Layouts, type NodeSingular, type StylesheetJson } from 'cytoscape';
 import cola from 'cytoscape-cola';
 import { GraphSearch, type SearchState } from './graphSearch';
+import { TruncationMarkers } from './truncationMarkers';
 import { heatColor, heatPalette, heatPosition, type HeatRange } from './heatmap';
 import { recursionAnnouncement, recursionColor, recursionOutlines } from './recursion';
 import { recursionDepth, type RecursionDepth } from '../src/recursion';
@@ -576,6 +577,9 @@ export function initializeGraphWebview(): void {
     }).join('\n');
   });
 
+  const truncationMarkers = new TruncationMarkers(cy, document.getElementById('truncation-markers')!,
+    message => vscode.postMessage(message));
+
   // Enclosures use an SVG overlay so they do not add synthetic nodes to layout, search or paths.
   const outlineHost = document.getElementById('recursion-outlines')!;
   const outlineSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -753,6 +757,7 @@ export function initializeGraphWebview(): void {
   showNoise.addEventListener('change', () => {
     hideTooltip();
     renderer.setShowNoise(showNoise.checked);
+    truncationMarkers.setShowNoise(showNoise.checked);
   });
 
   cy.on('mouseover', 'node', event => {
@@ -838,7 +843,11 @@ export function initializeGraphWebview(): void {
     }
     switch (message.type) {
       case 'graph':
+        truncationMarkers.setPreviews({});
         renderer.renderGraph(message.graph);
+        break;
+      case 'callerPreviews':
+        truncationMarkers.setPreviews(message.previews);
         break;
       case 'debugPath':
         renderer.highlightPath(message.path);
@@ -984,6 +993,7 @@ export function initializeGraphWebview(): void {
   // --- end replay feature ---
   window.addEventListener('unload', () => {
     stopReplay(); // replay feature
+    truncationMarkers.dispose();
     if (outlineFrame !== undefined) cancelAnimationFrame(outlineFrame);
     cy.off('viewport resize position add remove style', scheduleRecursionOutlines);
     observer.disconnect();
