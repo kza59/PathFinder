@@ -110,6 +110,32 @@ class GraphBuilder {
     return symbols;
   }
 
+  private async definitionEndLine(item: vscode.CallHierarchyItem): Promise<number> {
+    if (item.kind === vscode.SymbolKind.File || item.kind === vscode.SymbolKind.Module) {
+      return (await vscode.workspace.openTextDocument(item.uri)).lineCount;
+    }
+    // Call hierarchy ranges can cover only the declaration/name (Pylance),
+    // while debugger frames point into the body. Use the definition's outline
+    // range, matched by its declaration location rather than its name.
+    const find = (symbols: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
+      for (const symbol of symbols) {
+        if (!symbol.range.contains(item.selectionRange.start)) {
+          continue;
+        }
+        const child = find(symbol.children);
+        if (child) {
+          return child;
+        }
+        if (symbol.selectionRange.contains(item.selectionRange.start)) {
+          return symbol;
+        }
+      }
+      return undefined;
+    };
+    const symbol = find(await this.documentSymbols(item.uri));
+    return (symbol?.range ?? item.range).end.line + 1;
+  }
+
   /** "speak" -> "Dog.speak" / "Dog::speak", using the document outline for the enclosing classes. */
   private async qualifiedName(item: vscode.CallHierarchyItem): Promise<string> {
     // Calls from top-level code come back as a file/module item; the debugger calls that frame "<module>".
@@ -169,7 +195,7 @@ class GraphBuilder {
       label,
       file: item.uri.fsPath,
       line: item.selectionRange.start.line + 1,
-      endLine: item.range.end.line + 1,
+      endLine: await this.definitionEndLine(item),
     });
     return { id, isNew: true };
   }

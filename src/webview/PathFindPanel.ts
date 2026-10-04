@@ -74,6 +74,10 @@ export class PathFindPanel implements vscode.Disposable {
     this.send({ type: 'graph', graph });
   }
 
+  public get currentGraph(): GraphData | undefined {
+    return this.graph;
+  }
+
   public highlightPath(path: DebugPath): void {
     this.debugPath = [...path];
     this.sendDebugState();

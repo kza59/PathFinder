@@ -2,7 +2,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { buildCallGraph, CallGraph } from '../graphBuilder';
+import { buildCallGraph, CallGraph, findNodeForFrame } from '../graphBuilder';
 import { makeNodeId } from '../nodeId';
 import { Case, CASES } from './cases';
 
@@ -45,14 +45,30 @@ async function runCase(root: string, c: Case): Promise<boolean> {
   const started = Date.now();
   for (let attempt = 1; Date.now() - started < TIMEOUT_MS; attempt++) {
     let found = 0;
+    let graph: CallGraph | undefined;
     try {
-      const graph = await buildCallGraph(doc.uri, position);
+      graph = await buildCallGraph(doc.uri, position);
       found = graph?.nodes.length ?? 0;
       actual = JSON.stringify(describe(graph));
     } catch (err) {
       actual = `threw ${err instanceof Error ? err.message : err}`; // language server not ready yet
     }
     if (actual === expected) {
+      if (path.basename(root) === 'test1' && graph) {
+        // Runtime frames stop on executable body lines, not just declarations.
+        for (const [file, line, label] of [
+          ['main.py', 5, 'main'], ['function2.py', 6, 'function2'],
+          ['function2.py', 7, 'function2'], ['sum.py', 2, 'sum'],
+          ['main.py', 9, '<module>'],
+        ] as const) {
+          const node = findNodeForFrame(graph, path.join(root, file), line);
+          if (node?.label !== label) {
+            log(`  FAIL  ${c.name}: runtime ${file}:${line} expected ${label}, got ${node?.label ?? 'unmatched'}`);
+            log(`    ranges: ${JSON.stringify(graph.nodes.map(n => ({ label: n.label, file: n.file, line: n.line, endLine: n.endLine })))}`);
+            return false;
+          }
+        }
+      }
       log(`  PASS  ${c.name}`);
       return true;
     }

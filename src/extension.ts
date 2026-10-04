@@ -22,8 +22,7 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showWarningMessage('PathFinder: no function found here (is the language server still loading?)');
       return;
     }
-    // TODO: hand `graph` to the webview once rendering lands; JSON dump for now.
-
+    // TODO: hand `graph` to the webview once rendering lands; JSON dumclp for now.
     const panel = PathFindPanel.createOrShow(context.extensionUri);
     panel.renderGraph(graph);
 

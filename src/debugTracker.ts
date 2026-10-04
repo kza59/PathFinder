@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
-import { makeId } from './shared/makeId';
-import { postToWebview } from './shared/webviewBridge';
+import { findNodeForFrame } from './graphBuilder';
+import type { DebugPath, GraphData } from './types';
+import { PathFindPanel } from './webview/PathFindPanel';
 
 // Minimal slices of the Debug Adapter Protocol types we touch (avoids a dependency).
 interface DapFrame {
   name: string;
+  line: number;
   source?: { path?: string };
 }
 interface DapMessage {
@@ -20,7 +22,7 @@ interface DapMessage {
 
 /** Send the live path to the webview. Path is OUTER CALLER FIRST, current function LAST. */
 export function sendHighlight(path: string[]): void {
-  postToWebview({ type: 'highlight', path });
+  PathFindPanel.currentPanel?.highlightPath(path);
 }
 
 /**
@@ -30,12 +32,35 @@ export function sendHighlight(path: string[]): void {
 export function registerDebugTracker(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterTrackerFactory('*', {
-      createDebugAdapterTracker: () => createTracker(),
-    })
+      createDebugAdapterTracker: () => createTracker(() => PathFindPanel.currentPanel?.currentGraph),
+    }),
   );
 }
 
-function createTracker(): vscode.DebugAdapterTracker {
+export function resolveDebugPath(frames: DapFrame[], graph: GraphData | undefined): DebugPath {
+  const nodeIds = new Set(graph?.nodes.map(node => node.id));
+  return [...frames].reverse().map((frame, index) => {
+    const node = graph && frame.source?.path
+      ? findNodeForFrame(graph, frame.source.path, frame.line)
+      : undefined;
+    if (node) {
+      return node.id;
+    }
+    // Keep unknown frames in place: do not join disconnected callers or mark
+    // a caller as current when the actual current function is outside the graph.
+    let unknownId = `pathfinder-unmatched-frame-${index}`;
+    while (nodeIds.has(unknownId)) {
+      unknownId = `_${unknownId}`;
+    }
+    return unknownId;
+  });
+}
+
+export function createTracker(
+  getGraph: () => GraphData | undefined,
+  onFramesChanged: (frames: DapFrame[]) => void = frames =>
+    sendHighlight(resolveDebugPath(frames, getGraph())),
+): vscode.DebugAdapterTracker {
   // VS Code fetches the stack in PAGES: first just the top frame (startFrame 0, levels 1),
   // then the rest (startFrame 1, ...). So we remember each stackTrace request's arguments
   // and accumulate the frames, instead of trusting a single response.
@@ -77,14 +102,7 @@ function createTracker(): vscode.DebugAdapterTracker {
       // startFrame 0 = a fresh stack; otherwise append this page at its offset.
       const page = msg.body?.stackFrames ?? [];
       frames = frames.slice(0, req.startFrame).concat(page);
-
-      const path = [...frames]
-        .reverse() // outer caller first
-        .filter((f) => !!f.source?.path) // skip frames with no file (native/internal)
-        .map((f) => makeId(f.source!.path!, f.name));
-
-      console.log('[PathFinder] debug path:', path);
-      sendHighlight(path);
+      onFramesChanged(frames);
     },
   };
 }
