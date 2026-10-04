@@ -531,6 +531,26 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(cy.$('.has-args').length, 0);
   }],
   // --- end call values feature ---
+  // --- breakpoint markers ---
+  ['breakpoint markers add a corner dot without touching path/current borders, survive a re-render, and clear', (cy, renderer) => {
+    renderer.highlightPath(['root', 'a']);
+    const border = (id: string) => [cy.$id(id).style('border-color'), cy.$id(id).style('border-width')];
+    const before = border('a');
+    renderer.setBreakpoints({ a: 2, root: 1, unknown: 1 });
+    assert.deepEqual(cy.$('.has-breakpoint').map(node => node.id()).sort(), ['a', 'root']);
+    assert.match(String(cy.$id('a').style('background-image')), /^data:image\/svg\+xml/);
+    assert.deepEqual(border('a'), before);
+    assert.equal(cy.$id('a').hasClass('current'), true);
+    assert.equal(renderer.breakpointCount('a'), 2);
+    assert.equal(renderer.breakpointCount('b'), 0);
+    renderer.renderGraph(fixture);
+    assert.deepEqual(cy.$('.has-breakpoint').map(node => node.id()).sort(), ['a', 'root']);
+    renderer.setBreakpoints({ root: 1 });
+    assert.deepEqual(cy.$('.has-breakpoint').map(node => node.id()), ['root']);
+    renderer.setBreakpoints({});
+    assert.equal(cy.$('.has-breakpoint').length, 0);
+  }],
+  // --- end breakpoint markers ---
 ];
 
 async function main(): Promise<void> {

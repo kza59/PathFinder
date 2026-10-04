@@ -6,6 +6,7 @@ import { registerDebugTracker } from './debugTracker';
 import { registerHotPathCounting } from './hotPath'; // hot-path counting
 import { registerGdbHotPathCounting } from './hotPathGdb'; // hot-path counting for C/C++
 import { registerRecursionLog } from './recursionLog';
+import { registerBreakpointMarkers } from './breakpoints'; // breakpoint markers
 
 export function activate(context: vscode.ExtensionContext) {
   registerGraphRendererTestCommands(context);
@@ -15,6 +16,7 @@ export function activate(context: vscode.ExtensionContext) {
   registerHotPathCounting(context);
   registerGdbHotPathCounting(context);
   // --- end hot-path counting ---
+  registerBreakpointMarkers(context); // breakpoint markers
   // registerRecursionLog(context); // TEMPORARY: see src/recursionLog.ts
 
   // --- click-to-code feature ---
