@@ -135,8 +135,23 @@ export class PathFindPanel implements vscode.Disposable {
   <main>
     <div id="graph" role="img" aria-label="Directed function call graph"></div>
     <p id="empty">Waiting for graph data…</p>
+    <!-- --- legend feature --- swatch colors are filled in from graphStyles() by media/graph.ts -->
+    <details id="legend" open>
+      <summary>Legend</summary>
+      <ul>
+        <li><span class="swatch node" aria-hidden="true"></span>Function</li>
+        <li><span class="swatch node path" aria-hidden="true"></span>On current call path</li>
+        <li><span class="swatch node current" aria-hidden="true"></span>You are here</li>
+        <li><span class="swatch node dimmed" aria-hidden="true"></span>Not on current path</li>
+        <li><span class="swatch edge" aria-hidden="true"></span>Calls (caller → callee)</li>
+      </ul>
+    </details>
+    <!-- --- end legend feature --- -->
   </main>
   <footer>
+    <!-- --- breadcrumb feature --- -->
+    <nav id="breadcrumb" aria-label="Current call path" hidden></nav>
+    <!-- --- end breadcrumb feature --- -->
     <span id="runtime" role="status" aria-live="polite">No runtime path</span>
     <span id="selection">Click a function to see its source location</span>
   </footer>

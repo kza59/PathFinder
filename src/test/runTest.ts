@@ -9,6 +9,38 @@ import * as path from 'path';
 import { runTests } from '@vscode/test-electron';
 import { CASES } from './cases';
 
+// Extensions PathFinder doesn't need, turned off to speed up each test window (unknown IDs are ignored).
+// Python/Pylance/debugpy and Microsoft C/C++ stay on: call hierarchy comes from them.
+// Keep in sync with the --disable-extension list in .vscode/launch.json.
+const DISABLED_EXTENSIONS = [
+  'ms-toolsai.jupyter',
+  'stmicroelectronics.stm32-vscode-extension',
+  'stmicroelectronics.stm32cube-ide-build-analyzer',
+  'stmicroelectronics.stm32cube-ide-build-cmake',
+  'stmicroelectronics.stm32cube-ide-bundles-manager',
+  'stmicroelectronics.stm32cube-ide-clangd',
+  'stmicroelectronics.stm32cube-ide-core',
+  'stmicroelectronics.stm32cube-ide-debug-core',
+  'stmicroelectronics.stm32cube-ide-debug-generic-gdbserver',
+  'stmicroelectronics.stm32cube-ide-debug-jlink-gdbserver',
+  'stmicroelectronics.stm32cube-ide-debug-stlink-gdbserver',
+  'stmicroelectronics.stm32cube-ide-project-manager',
+  'stmicroelectronics.stm32cube-ide-registers',
+  'stmicroelectronics.stm32cube-ide-rtos',
+  'espressif.esp-idf-extension',
+  'ms-vscode.cmake-tools',
+  'eamodio.gitlens',
+  'ms-vsliveshare.vsliveshare',
+  'james-yu.latex-workshop',
+  'mathematic.vscode-latex',
+  'google.colab',
+  'ms-vscode-remote.remote-ssh',
+  'msjsdiag.vscode-react-native',
+  'ms-vscode.powershell',
+  'visualstudioexptteam.vscodeintellicode',
+  'visualstudioexptteam.intellicode-api-usage-examples',
+];
+
 function bar(done: number, total: number, width = 20): string {
   const filled = Math.round((done / total) * width);
   return `[${'█'.repeat(filled)}${'░'.repeat(width - filled)}] ${done}/${total}`;
@@ -62,7 +94,7 @@ async function main() {
           path.join(repo, fixture),
           '--extensions-dir', path.join(os.homedir(), '.vscode', 'extensions'),
           '--user-data-dir', fs.mkdtempSync(path.join(os.tmpdir(), 'pathfinder-test-')),
-          '--disable-extension=ms-toolsai.jupyter',
+          ...DISABLED_EXTENSIONS.map(id => `--disable-extension=${id}`),
           '--disable-workspace-trust',
         ],
       });

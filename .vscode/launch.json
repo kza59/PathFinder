@@ -7,7 +7,35 @@
       "request": "launch",
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}",
+        // Extensions PathFinder doesn't need, turned off to speed up the test window (unknown IDs are ignored).
+        // Keep Python/Pylance/debugpy and Microsoft C/C++ enabled: call hierarchy and debugging come from them.
+        // Keep this list in sync with DISABLED_EXTENSIONS in src/test/runTest.ts.
         "--disable-extension=ms-toolsai.jupyter",
+        "--disable-extension=stmicroelectronics.stm32-vscode-extension",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-build-analyzer",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-build-cmake",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-bundles-manager",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-clangd",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-core",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-debug-core",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-debug-generic-gdbserver",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-debug-jlink-gdbserver",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-debug-stlink-gdbserver",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-project-manager",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-registers",
+        "--disable-extension=stmicroelectronics.stm32cube-ide-rtos",
+        "--disable-extension=espressif.esp-idf-extension",
+        "--disable-extension=ms-vscode.cmake-tools",
+        "--disable-extension=eamodio.gitlens",
+        "--disable-extension=ms-vsliveshare.vsliveshare",
+        "--disable-extension=james-yu.latex-workshop",
+        "--disable-extension=mathematic.vscode-latex",
+        "--disable-extension=google.colab",
+        "--disable-extension=ms-vscode-remote.remote-ssh",
+        "--disable-extension=msjsdiag.vscode-react-native",
+        "--disable-extension=ms-vscode.powershell",
+        "--disable-extension=visualstudioexptteam.vscodeintellicode",
+        "--disable-extension=visualstudioexptteam.intellicode-api-usage-examples",
         "${workspaceFolder}/${input:fixture}"
       ],
       "outFiles": ["${workspaceFolder}/out/**/*.js"],
@@ -19,7 +47,7 @@
       "id": "fixture",
       "type": "pickString",
       "description": "Folder to open in the Extension Development Host",
-      "options": ["test1", "test2", "test3", "test4/python", "test4/cpp", "test6"],
+      "options": ["test1", "test2", "test3", "test4/python", "test4/cpp", "test5/python", "test5/c", "test6"],
       "default": "test1"
     }
   ]

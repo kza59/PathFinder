@@ -3,11 +3,13 @@ import { buildCallGraph } from './graphBuilder';
 import { registerGraphRendererTestCommands } from './test/graphRendererTest';
 import { PathFindPanel } from './webview/PathFindPanel';
 import { registerDebugTracker } from './debugTracker';
+import { registerRecursionLog } from './recursionLog';
 
 export function activate(context: vscode.ExtensionContext) {
   registerGraphRendererTestCommands(context);
   const output = vscode.window.createOutputChannel('PathFinder');
   registerDebugTracker(context);
+  // registerRecursionLog(context); // TEMPORARY: see src/recursionLog.ts
 
   // --- click-to-code feature ---
   // The panel is created lazily (and re-created after it's closed), so subscribe per panel instance.
