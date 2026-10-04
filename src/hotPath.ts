@@ -20,7 +20,7 @@ import { PathFindPanel } from './webview/PathFindPanel';
  */
 
 const PYTHON_DEBUG_TYPES = ['debugpy', 'python'];
-const DIR_CONFIG_KEY = 'pathfinderHotDir'; // carries the counts folder from the config to the session
+export const DIR_CONFIG_KEY = 'pathfinderHotDir'; // carries the counts folder from the config to the session (also set by hotPathGdb.ts)
 const POLL_MS = 300;
 
 /** One function as reported by sitecustomize.py. Lines are 1-based. */
@@ -262,7 +262,7 @@ export function registerHotPathCounting(context: vscode.ExtensionContext): void 
     await session.stop();
     output.appendLine(session.receivedAnything
       ? `[${new Date().toLocaleTimeString()}] debug session ended; final counts above.`
-      : `[${new Date().toLocaleTimeString()}] debug session ended without any counts (is the interpreter Python 3.12+?).`);
+      : `[${new Date().toLocaleTimeString()}] debug session ended without any counts (Python needs 3.12+; C/C++ needs gdb and a debug build).`);
   };
 
   context.subscriptions.push(
