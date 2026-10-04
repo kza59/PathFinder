@@ -7,11 +7,19 @@ import { recursionAnnouncement, recursionColor, recursionOutlines } from './recu
 import { recursionDepth, type RecursionDepth } from '../src/recursion';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
-import type { CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, WebviewMessage } from '../src/types';
+import type { BreakpointCounts, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, WebviewMessage } from '../src/types';
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
 
 type LayoutMode = 'trace' | 'explore';
+
+// --- breakpoint markers ---
+// VS Code's breakpoint red, with a white ring so the dot stays visible on any fill (including heatmap red).
+export const BREAKPOINT_COLOR = '#e51400';
+const BREAKPOINT_DOT = `data:image/svg+xml;utf8,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="${BREAKPOINT_COLOR}" stroke="#ffffff" stroke-width="1.5"/></svg>`,
+)}`;
+// --- end breakpoint markers ---
 
 export const layoutOptions = {
   name: 'preset' as const,
@@ -55,6 +63,22 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
       style: { 'font-size': '12px', 'text-overflow-wrap': 'anywhere' },
     },
     // --- end call values feature ---
+    // --- breakpoint markers --- a dot in the top-left corner. Drawn as a background image, so it composes
+    // with every other state (path/current/target use the border, hover/selection the underlay, heat the fill).
+    {
+      selector: 'node.has-breakpoint',
+      style: {
+        'background-image': BREAKPOINT_DOT,
+        'background-width': '14px',
+        'background-height': '14px',
+        'background-position-x': '7px',
+        'background-position-y': '7px',
+        'background-fit': 'none',
+        'background-repeat': 'no-repeat',
+        'background-clip': 'none',
+      },
+    },
+    // --- end breakpoint markers ---
     {
       // Heat changes only the fill; borders, halos, opacity and search overlays still compose.
       selector: 'node.heat-counted',
@@ -222,6 +246,25 @@ export class GraphRenderer {
     }));
   }
   // --- end call values feature ---
+  // --- breakpoint markers ---
+  private breakpoints: BreakpointCounts = {};
+
+  public breakpointCount(id: string): number {
+    return Object.prototype.hasOwnProperty.call(this.breakpoints, id) ? this.breakpoints[id] : 0;
+  }
+
+  /** Full snapshot (not a delta): nodes absent from it lose their marker. */
+  public setBreakpoints(counts: BreakpointCounts): void {
+    this.breakpoints = { ...counts };
+    this.applyBreakpoints();
+  }
+
+  private applyBreakpoints(): void {
+    this.cy.batch(() => this.cy.nodes().forEach(node => {
+      node.toggleClass('has-breakpoint', this.breakpointCount(node.id()) > 0);
+    }));
+  }
+  // --- end breakpoint markers ---
 
   constructor(
     private readonly cy: Core,
@@ -364,6 +407,7 @@ export class GraphRenderer {
     this.staticPositions = new Map(this.cy.nodes().map(node => [node.id(), { ...node.position() }]));
     if (this.mode === 'explore') this.applyLayoutMode();
     this.applyCallValues(); // call values feature
+    this.applyBreakpoints(); // breakpoint markers
     this.highlightPath(this.path);
     this.applyHotCounts();
     this.graphRendered(this.visibleNodeCount);
@@ -705,6 +749,9 @@ export function initializeGraphWebview(): void {
     }
   };
   // --- end call values feature ---
+  // --- breakpoint markers ---
+  const tooltipBreakpoints = tooltip.appendChild(document.createElement('div'));
+  // --- end breakpoint markers ---
   tooltipHost.appendChild(tooltip);
   const refreshTooltipCount = () => {
     const count = tooltipNodeId === undefined ? undefined : renderer.getHotCount(tooltipNodeId);
@@ -767,6 +814,11 @@ export function initializeGraphWebview(): void {
     const callees = element.outgoers('node').length;
     tooltipConnections.textContent = `${callers} ${callers === 1 ? 'caller' : 'callers'} · ${callees} ${callees === 1 ? 'callee' : 'callees'}`;
     renderTooltipArgs(renderer.callValue(node.id)); // call values feature
+    // --- breakpoint markers ---
+    const breakpoints = renderer.breakpointCount(node.id);
+    tooltipBreakpoints.hidden = breakpoints === 0;
+    tooltipBreakpoints.textContent = `${breakpoints} ${breakpoints === 1 ? 'breakpoint' : 'breakpoints'} in this function`;
+    // --- end breakpoint markers ---
     tooltip.hidden = false;
     moveTooltip(event.renderedPosition.x, event.renderedPosition.y);
   });
@@ -807,6 +859,7 @@ export function initializeGraphWebview(): void {
     '--pf-target': styleValue('node.target', 'border-color'),
     '--pf-hover-in': styleValue('edge.hover-in', 'line-color'),
     '--pf-hover-out': styleValue('edge.hover-out', 'line-color'),
+    '--pf-breakpoint': BREAKPOINT_COLOR, // breakpoint markers
   };
   for (const [name, value] of Object.entries(legendColors)) {
     document.documentElement.style.setProperty(name, value);
@@ -846,6 +899,11 @@ export function initializeGraphWebview(): void {
         renderer.setCallValues(message.values);
         break;
       // --- end call values feature ---
+      // --- breakpoint markers ---
+      case 'breakpoints':
+        renderer.setBreakpoints(message.counts);
+        break;
+      // --- end breakpoint markers ---
     }
   });
 

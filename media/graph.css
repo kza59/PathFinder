@@ -399,6 +399,24 @@ footer {
 #legend .swatch.edge.outgoing { --pf-edge: var(--pf-hover-out); height: 4px; }
 /* --- end legend feature --- */
 
+/* --- breakpoint markers --- legend swatch: the node box with the red corner dot */
+#legend .swatch.node.breakpoint {
+  position: relative;
+}
+
+#legend .swatch.node.breakpoint::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid #ffffff;
+  border-radius: 50%;
+  background: var(--pf-breakpoint);
+}
+/* --- end breakpoint markers --- */
+
 /* --- heatmap feature --- */
 #heat-legend {
   max-width: 270px;

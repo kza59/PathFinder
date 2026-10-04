@@ -6,6 +6,7 @@ import { registerDebugTracker } from './debugTracker';
 import { registerHotPathCounting } from './hotPath'; // hot-path counting
 import { registerGdbHotPathCounting } from './hotPathGdb'; // hot-path counting for C/C++
 import { registerExplainPath } from './explainPath'; // optional AI explanation of the live path
+import { registerBreakpointMarkers } from './breakpoints'; // breakpoint markers
 
 export function activate(context: vscode.ExtensionContext) {
   registerGraphRendererTestCommands(context);
@@ -16,6 +17,7 @@ export function activate(context: vscode.ExtensionContext) {
   registerGdbHotPathCounting(context);
   registerExplainPath(context);
   // --- end hot-path counting ---
+  registerBreakpointMarkers(context); // breakpoint markers
 
   // --- click-to-code feature ---
   // The panel is created lazily (and re-created after it's closed), so subscribe per panel instance.
