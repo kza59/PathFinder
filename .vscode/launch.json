@@ -49,7 +49,7 @@
       "id": "fixture",
       "type": "pickString",
       "description": "Folder to open in the Extension Development Host",
-      "options": ["test1", "test2", "test3", "test4/python", "test4/cpp", "test5/python", "test5/c", "test6", "test7/python", "test7/cpp", "test8", "test9/python", "test9/c", "test9/cpp"],
+      "options": ["test1", "test2", "test3", "test4/python", "test4/cpp", "test5/python", "test5/c", "test6", "test7/python", "test7/cpp", "test8", "test9/python", "test9/c", "test9/cpp", "../shopflow", "../sensord"],
       "default": "test1"
     }
   ]

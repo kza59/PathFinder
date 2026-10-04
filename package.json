@@ -1,7 +1,6 @@
 {
   "name": "pathfinder",
   "displayName": "PathFinder",
-  "publisher": "pathfinder-team",
   "description": "Right-click a function to see every call path that leads to it.",
   "publisher": "pathfinder-team-stormhacks",
   "version": "0.0.1",
