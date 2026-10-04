@@ -249,6 +249,32 @@ export function initializeGraphWebview(): void {
   cy.on('viewport grab', hideTooltip);
   container.addEventListener('mouseleave', hideTooltip);
   // --- end hover tooltip feature ---
+
+  // --- legend feature ---
+  // The legend's swatch colors are read out of graphStyles() rather than repeated here,
+  // so the legend can't drift from the real node/edge styles.
+  const styleValue = (selector: string, property: string): string => {
+    for (const block of graphStyles()) {
+      if (block.selector === selector) {
+        const value = ('style' in block ? block.style : block.css) as unknown as Record<string, unknown>;
+        if (property in value) {
+          return String(value[property]);
+        }
+      }
+    }
+    return '';
+  };
+  const legendColors: Record<string, string> = {
+    '--pf-node-border': styleValue('node', 'border-color'),
+    '--pf-path': styleValue('node.path', 'border-color'),
+    '--pf-current': styleValue('node.current', 'border-color'),
+    '--pf-dimmed': styleValue('.dimmed', 'opacity'),
+    '--pf-edge': styleValue('edge', 'line-color'),
+  };
+  for (const [name, value] of Object.entries(legendColors)) {
+    document.documentElement.style.setProperty(name, value);
+  }
+  // --- end legend feature ---
   document.getElementById('fit')!.addEventListener('click', () => {
     if (cy.nodes().length) {
       cy.fit(undefined, 40);
@@ -273,6 +299,64 @@ export function initializeGraphWebview(): void {
         break;
     }
   });
+
+  // --- breadcrumb feature ---
+  // A second listener, registered after the renderer's, so the graph is already updated when
+  // ids are resolved to labels. A new graph re-resolves the last path, like the renderer does.
+  const breadcrumb = document.getElementById('breadcrumb')!;
+  let breadcrumbPath: DebugPath = [];
+  const renderBreadcrumb = () => {
+    breadcrumb.replaceChildren();
+    breadcrumb.hidden = breadcrumbPath.length === 0;
+    // Any id that isn't a node in the graph (pathfinder-unmatched-frame-N placeholders, or ids
+    // from a different graph) reads as "(outside graph)"; consecutive ones collapse into one crumb.
+    const crumbs: { node?: GraphNode; count: number }[] = [];
+    for (const id of breadcrumbPath) {
+      const element = cy.getElementById(id);
+      const node = element.length && element.isNode() ? element.data() as GraphNode : undefined;
+      const previous = crumbs[crumbs.length - 1];
+      if (!node && previous && !previous.node) {
+        previous.count++;
+      } else {
+        crumbs.push({ node, count: 1 });
+      }
+    }
+    crumbs.forEach(({ node, count }, index) => {
+      if (index > 0) {
+        const separator = breadcrumb.appendChild(document.createElement('span'));
+        separator.className = 'crumb-sep';
+        separator.setAttribute('aria-hidden', 'true');
+        separator.textContent = '→';
+      }
+      const crumb = breadcrumb.appendChild(document.createElement('span'));
+      crumb.className = node ? 'crumb' : 'crumb outside';
+      crumb.textContent = node ? node.label : count > 1 ? `(outside graph ×${count})` : '(outside graph)';
+      if (node) {
+        crumb.title = `${node.file}:${node.line}`;
+      }
+      if (index === crumbs.length - 1) {
+        crumb.classList.add('current');
+        crumb.setAttribute('aria-current', 'location');
+      }
+    });
+    // Long chains scroll horizontally; keep the current function in view.
+    breadcrumb.scrollLeft = breadcrumb.scrollWidth;
+  };
+  window.addEventListener('message', (event: MessageEvent<GraphMessage>) => {
+    const message = event.data;
+    if (!message || typeof message !== 'object') {
+      return;
+    }
+    if (message.type === 'debugPath') {
+      breadcrumbPath = [...message.path];
+    } else if (message.type === 'debugClear') {
+      breadcrumbPath = [];
+    } else if (message.type !== 'graph') {
+      return;
+    }
+    renderBreadcrumb();
+  });
+  // --- end breadcrumb feature ---
   window.addEventListener('unload', () => {
     observer.disconnect();
     cy.destroy();

@@ -114,3 +114,110 @@ footer {
   color: var(--vscode-descriptionForeground, #b0b0b0);
 }
 /* --- end hover tooltip feature --- */
+
+/* --- legend feature --- */
+/* --pf-* colors are set from graphStyles() in media/graph.ts, so they always match the graph. */
+#legend {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  padding: 4px 8px;
+  border: 1px solid var(--vscode-panel-border, #454545);
+  border-radius: 3px;
+  background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background, #252526));
+  font-size: 0.9em;
+}
+
+#legend summary {
+  cursor: pointer;
+  user-select: none;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+
+#legend ul {
+  display: grid;
+  gap: 5px;
+  margin: 6px 0 2px;
+  padding: 0;
+  list-style: none;
+}
+
+#legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+#legend .swatch {
+  flex: none;
+  box-sizing: border-box;
+  width: 24px;
+  height: 14px;
+}
+
+/* Border widths mirror graphStyles(): node 2px, path 3px, current 5px double. */
+#legend .swatch.node {
+  border: 2px solid var(--pf-node-border);
+  border-radius: 3px;
+  background: var(--vscode-sideBar-background, #252526);
+}
+
+#legend .swatch.node.path {
+  border-width: 3px;
+  border-color: var(--pf-path);
+}
+
+#legend .swatch.node.current {
+  border: 5px double var(--pf-current);
+}
+
+#legend .swatch.node.dimmed {
+  opacity: var(--pf-dimmed);
+}
+
+#legend .swatch.edge {
+  position: relative;
+  height: 2px;
+  background: var(--pf-edge);
+}
+
+#legend .swatch.edge::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  right: -2px;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 7px solid var(--pf-edge);
+}
+/* --- end legend feature --- */
+
+/* --- breadcrumb feature --- */
+#breadcrumb {
+  flex: 1 0 100%;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: thin;
+}
+
+#breadcrumb[hidden] {
+  display: none;
+}
+
+#breadcrumb .crumb-sep {
+  margin: 0 6px;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+
+#breadcrumb .crumb.outside {
+  font-style: italic;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+
+#breadcrumb .crumb.current {
+  font-weight: bold;
+}
+/* --- end breadcrumb feature --- */
