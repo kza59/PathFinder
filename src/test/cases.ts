@@ -11,6 +11,7 @@ export interface Case {
   symbol: string;       // ...at the first occurrence of this name on it
   nodes: string[];
   edges: ExpectedEdge[];
+  recursionGroups?: string[][]; // node ids that form each recursive structure; omitted = no recursion expected
 }
 
 interface ReadmeLines {
@@ -40,6 +41,40 @@ const pyGraph = readmeGraph('py',
 const cLines: ReadmeLines = { f1Sum: 6, f2Sum: 8, f3Sum: 12, f2F1: 7, f3F1: [11, 13], f3F2: 10, mainF2: 5 };
 const cGraph = readmeGraph('c', cLines);
 const cppGraph = readmeGraph('cpp', cLines);
+
+// Same three recursive shapes in both languages: a function calling itself (countdown), two calling each
+// other (is_even <-> is_odd), and a three-function loop (step_a -> step_b -> step_c -> step_a).
+const recursionGraph = (rec: string, main: string, l: Record<string, number>, extraNodes: string[] = [], extraEdges: ExpectedEdge[] = []) => ({
+  nodes: [`${rec}::leaf`, `${rec}::countdown`, `${rec}::is_even`, `${rec}::is_odd`,
+    `${rec}::step_a`, `${rec}::step_b`, `${rec}::step_c`, `${main}::main`, ...extraNodes],
+  edges: [
+    [`${rec}::countdown`, `${rec}::leaf`, [l.countdownLeaf]],
+    [`${rec}::countdown`, `${rec}::countdown`, [l.countdownSelf]],
+    [`${rec}::is_even`, `${rec}::leaf`, [l.evenLeaf]],
+    [`${rec}::is_odd`, `${rec}::leaf`, [l.oddLeaf]],
+    [`${rec}::is_even`, `${rec}::is_odd`, [l.evenOdd]],
+    [`${rec}::is_odd`, `${rec}::is_even`, [l.oddEven]],
+    [`${rec}::step_c`, `${rec}::leaf`, [l.cLeaf]],
+    [`${rec}::step_a`, `${rec}::step_b`, [l.ab]],
+    [`${rec}::step_b`, `${rec}::step_c`, [l.bc]],
+    [`${rec}::step_c`, `${rec}::step_a`, [l.ca]],
+    [`${main}::main`, `${rec}::countdown`, [5]],
+    [`${main}::main`, `${rec}::is_even`, [6]],
+    [`${main}::main`, `${rec}::step_a`, [7]],
+    ...extraEdges,
+  ] as ExpectedEdge[],
+  recursionGroups: [
+    [`${rec}::countdown`],
+    [`${rec}::is_even`, `${rec}::is_odd`],
+    [`${rec}::step_a`, `${rec}::step_b`, `${rec}::step_c`],
+  ],
+});
+
+const pyRecursion = recursionGraph('recursion.py', 'main.py',
+  { countdownLeaf: 7, countdownSelf: 8, evenLeaf: 13, oddLeaf: 19, evenOdd: 14, oddEven: 20, cLeaf: 33, ab: 24, bc: 28, ca: 34 },
+  ['main.py::<module>'], [['main.py::<module>', 'main.py::main', [11]]]);
+const cRecursion = recursionGraph('recursion.c', 'main.c',
+  { countdownLeaf: 11, countdownSelf: 12, evenLeaf: 18, oddLeaf: 25, evenOdd: 19, oddEven: 26, cLeaf: 42, ab: 31, bc: 36, ca: 43 });
 
 export const CASES: Record<string, Case[]> = {
   test1: [
@@ -104,6 +139,32 @@ export const CASES: Record<string, Case[]> = {
         ['main.cpp::dog_owner', 'animals.cpp::Dog::speak', [5]],
         ['main.cpp::main', 'main.cpp::dog_owner', [15]],
       ],
+    },
+  ],
+  'test5/python': [
+    { name: 'python recursion: all three shapes reach leaf', file: 'recursion.py', lineContains: 'def leaf', symbol: 'leaf', ...pyRecursion },
+    {
+      name: 'python recursion: the right-clicked function is itself recursive', file: 'recursion.py', lineContains: 'def countdown', symbol: 'countdown',
+      nodes: ['recursion.py::countdown', 'main.py::main', 'main.py::<module>'],
+      edges: [
+        ['recursion.py::countdown', 'recursion.py::countdown', [8]],
+        ['main.py::main', 'recursion.py::countdown', [5]],
+        ['main.py::<module>', 'main.py::main', [11]],
+      ],
+      recursionGroups: [['recursion.py::countdown']],
+    },
+  ],
+  'test5/c': [
+    { name: 'C recursion: all three shapes reach leaf', file: 'recursion.c', lineContains: 'int leaf', symbol: 'leaf', ...cRecursion },
+    { name: 'C recursion: from the prototype in the header', file: 'recursion.h', lineContains: 'int leaf', symbol: 'leaf', ...cRecursion },
+    {
+      name: 'C recursion: the right-clicked function is itself recursive', file: 'recursion.c', lineContains: 'int countdown', symbol: 'countdown',
+      nodes: ['recursion.c::countdown', 'main.c::main'],
+      edges: [
+        ['recursion.c::countdown', 'recursion.c::countdown', [12]],
+        ['main.c::main', 'recursion.c::countdown', [5]],
+      ],
+      recursionGroups: [['recursion.c::countdown']],
     },
   ],
 };
