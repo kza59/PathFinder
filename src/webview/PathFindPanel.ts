@@ -165,6 +165,7 @@ export class PathFindPanel implements vscode.Disposable {
         <button id="search-previous" class="search-arrow" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)" disabled>&#8593;</button>
         <button id="search-next" class="search-arrow" type="button" aria-label="Next match" title="Next match (Enter)" disabled>&#8595;</button>
       </form>
+      <label class="noise-toggle"><input id="show-noise" type="checkbox"> Show Noise</label>
       <select id="layout-mode" aria-label="Graph layout">
         <option value="trace">Trace</option>
         <option value="explore">Explore</option>

@@ -5,6 +5,7 @@ import { GraphRenderer, graphStyles } from './graph';
 import { heatColor, heatPalette, type HeatRange } from './heatmap';
 import type { GraphData, HotCounts } from '../src/types';
 import { largeSearchGraph } from '../src/test/mockdata';
+import { CASES } from '../src/test/cases';
 
 const fixture: GraphData = {
   targetIds: ['t'],
@@ -13,8 +14,180 @@ const fixture: GraphData = {
     .map(([from, to]) => ({ from, to, lines: [1] })),
 };
 const edge = (cy: Core, from: string, to: string) => cy.edges().filter(e => e.source().id() === from && e.target().id() === to);
+const noiseFixture: GraphData = {
+  ...fixture,
+  nodes: fixture.nodes.map(node => ({ ...node, noise: node.id === 'a' })),
+  edges: [...fixture.edges, { from: 'b', to: 'a', lines: [1] }, { from: 'a', to: 'a', lines: [1] }],
+};
 
 const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void>][] = [
+  ...['test7/python', 'test7/cpp'].map(folder => [
+    `${folder}: noise starts hidden and the toggle restores all tagged nodes and their edges`,
+    (cy: Core, renderer: GraphRenderer) => {
+      const expected = CASES[folder][0];
+      const graph: GraphData = {
+        targetIds: [`${expected.file}::target`],
+        nodes: expected.nodes.map(id => ({
+          id, label: id.split('::').slice(1).join('::'), file: id.split('::')[0], line: 1, endLine: 2,
+          ...(expected.noise?.includes(id) || id.endsWith('::<module>') ? { noise: true } : {}),
+        })),
+        edges: expected.edges.map(([from, to, lines]) => ({ from, to, lines })),
+      };
+      renderer.renderGraph(graph);
+      assert.equal(renderer.visibleNodeCount, 4);
+      assert.equal(cy.edges(':visible').length, 4);
+      const visible = graph.nodes.filter(node => !node.noise).map(node => node.id);
+      assert.deepEqual(cy.nodes(':visible').map(node => node.id()), visible);
+      assert.equal(cy.elements().length, graph.nodes.length + graph.edges.length);
+      renderer.setShowNoise(true);
+      assert.equal(renderer.visibleNodeCount, graph.nodes.length);
+      assert.equal(cy.edges(':visible').length, graph.edges.length);
+      renderer.setShowNoise(false);
+      assert.deepEqual(cy.nodes(':visible').map(node => node.id()), visible);
+      assert.equal(cy.edges(':visible').length, 4);
+    },
+  ] as [string, (cy: Core, renderer: GraphRenderer) => void]),
+  ['noise visibility covers incoming, outgoing and self edges, while false and missing remain visible', (cy, renderer) => {
+    renderer.renderGraph({ ...noiseFixture, nodes: noiseFixture.nodes.map(node => node.id === 'other'
+      ? { id: node.id, label: node.label, file: node.file, line: node.line, endLine: node.endLine } : node) });
+    assert.equal(cy.$id('a').visible(), false);
+    assert.equal(cy.$id('root').visible(), true);
+    assert.equal(cy.$id('other').visible(), true);
+    for (const [from, to] of [['root', 'a'], ['a', 't'], ['a', 'b'], ['b', 'a'], ['a', 'a']]) {
+      assert.equal(edge(cy, from, to).style('display'), 'none');
+      assert.equal(edge(cy, from, to).visible(), false);
+    }
+    assert.equal(edge(cy, 't', 't').visible(), true);
+    assert.equal(edge(cy, 'b', 't').visible(), true);
+    renderer.setShowNoise(true);
+    assert.equal(cy.elements(':hidden').length, 0);
+  }],
+  ['noise toggles preserve elements, data, positions, styling, selection and viewport without layouts', (cy, renderer) => {
+    renderer.renderGraph(noiseFixture);
+    renderer.setShowNoise(true);
+    renderer.highlightPath(['root', 'a', 't']);
+    renderer.setHotCounts({ root: 1, a: 10, t: 100 });
+    cy.$id('a').select();
+    renderer.hoverNode('b');
+    renderer.search.find('other');
+    cy.zoom(1.2); cy.pan({ x: 51, y: 32 });
+    const elements = cy.elements().toArray();
+    const positions = () => cy.nodes().map(node => ({ id: node.id(), ...node.position(), locked: node.locked() }));
+    const beforePositions = positions();
+    const appearance = () => cy.elements().map(element => ({
+      id: element.id(), data: { ...element.data() },
+      classes: element.classes().filter(name => name !== 'noise-hidden'), selected: element.selected(),
+      fill: element.style('background-color'), border: element.style('border-color'),
+      line: element.style('line-color'), opacity: element.style('opacity'),
+    }));
+    const before = appearance();
+    const events: string[] = [];
+    cy.on('layoutstart layoutstop add remove position viewport', event => events.push(event.type));
+    for (const show of [false, false, true, true, false, true]) {
+      renderer.setShowNoise(show);
+      assert.deepEqual(appearance(), before);
+      assert.deepEqual(positions(), beforePositions);
+      assert.deepEqual(cy.pan(), { x: 51, y: 32 });
+      assert.equal(cy.zoom(), 1.2);
+      cy.elements().forEach((element, index) => assert.equal(element, elements[index]));
+      assert.deepEqual(renderer.heatRange, { min: 1, max: 100 });
+    }
+    assert.deepEqual(events, []);
+  }],
+  ['noise visibility refreshes search results without clearing the query or moving the viewport', (cy, renderer) => {
+    renderer.renderGraph({
+      ...noiseFixture,
+      nodes: noiseFixture.nodes.map(node => ['a', 'b'].includes(node.id) ? { ...node, label: 'match' } : node),
+    });
+    assert.equal(renderer.search.find('MATCH').count, 1);
+    assert.equal(renderer.search.move(1).node?.id, 'b');
+    cy.zoom(1.2); cy.pan({ x: 51, y: 32 });
+    renderer.setShowNoise(true);
+    let state = renderer.search.refresh();
+    assert.equal(state.query, 'match');
+    assert.equal(state.count, 2);
+    assert.equal(state.node?.id, 'b');
+    assert.equal(cy.$id('b').hasClass('search-hit'), true);
+    assert.equal(renderer.search.move(1).node?.id, 'a');
+    cy.pan({ x: 51, y: 32 });
+    renderer.setShowNoise(false);
+    state = renderer.search.refresh();
+    assert.equal(state.query, 'match');
+    assert.equal(state.count, 1);
+    assert.equal(state.node?.id, 'b');
+    assert.equal(cy.$id('a').hasClass('search-hit'), false);
+    assert.deepEqual(cy.pan(), { x: 51, y: 32 });
+    assert.equal(cy.zoom(), 1.2);
+    assert.equal(renderer.search.find('a').count, 1); // Visible "match" includes "a".
+    assert.equal(renderer.search.find('root').node?.id, 'root');
+    renderer.renderGraph(noiseFixture);
+    assert.equal(renderer.search.find('a').count, 0);
+    renderer.setShowNoise(true);
+    assert.equal(renderer.search.refresh().node?.id, 'a');
+  }],
+  ['hiding a hovered noise node clears hover; runtime and heat updates never reveal it', (cy, renderer) => {
+    renderer.renderGraph(noiseFixture);
+    renderer.setShowNoise(true);
+    renderer.hoverNode('a');
+    assert.equal(cy.$id('a').hasClass('hovered'), true);
+    renderer.setShowNoise(false);
+    assert.equal(cy.$('.hovered, .hover-faded, .hover-in, .hover-out').length, 0);
+    renderer.hoverNode('a');
+    assert.equal(cy.$('.hovered').length, 0);
+    renderer.highlightPath(['root', 'a']);
+    renderer.setHotCounts({ a: 10 });
+    assert.equal(cy.$id('a').visible(), false);
+    assert.equal(edge(cy, 'root', 'a').visible(), false);
+    assert.equal(cy.$id('a').hasClass('current'), true);
+    renderer.setShowNoise(true);
+    assert.equal(cy.$id('a').visible(), true);
+    assert.equal(cy.$id('a').hasClass('current'), true);
+    assert.equal(cy.$id('a').hasClass('heat-counted'), true);
+    assert.equal(edge(cy, 'root', 'a').hasClass('path'), true);
+  }],
+  ['replacement graphs retain the toggle and report visible counts, including an all-noise target', (cy) => {
+    const rendered: number[] = [];
+    const changed: number[] = [];
+    const renderer = new GraphRenderer(cy, count => rendered.push(count), undefined, undefined, undefined,
+      count => changed.push(count));
+    try {
+      const graph: GraphData = { nodes: [{ ...fixture.nodes[3], noise: true }], edges: [], targetIds: ['t'] };
+      renderer.renderGraph(graph);
+      assert.equal(renderer.visibleNodeCount, 0);
+      assert.equal(cy.$id('t').hasClass('target'), true);
+      renderer.setShowNoise(true);
+      renderer.renderGraph(graph);
+      assert.equal(renderer.visibleNodeCount, 1);
+      renderer.setShowNoise(false);
+      renderer.renderGraph(graph);
+      assert.equal(renderer.visibleNodeCount, 0);
+      renderer.renderGraph({ nodes: [], edges: [] });
+      renderer.setShowNoise(true);
+      assert.deepEqual(rendered, [0, 1, 0, 0]);
+      assert.deepEqual(changed, [1, 0, 0]);
+    } finally { renderer.dispose(); }
+  }],
+  ['noise toggles in Explore preserve the running simulation and Trace coordinates', (cy, renderer) => {
+    renderer.renderGraph(noiseFixture);
+    const tracePositions = cy.nodes().map(node => ({ id: node.id(), ...node.position() }));
+    renderer.setLayoutMode('explore');
+    advanceAnimationFrames(10);
+    const positions = cy.nodes().map(node => ({ id: node.id(), ...node.position() }));
+    const frames = pendingAnimationFrames();
+    let layouts = 0;
+    cy.on('layoutstart layoutstop', () => layouts++);
+    renderer.setShowNoise(true);
+    renderer.setShowNoise(false);
+    assert.equal(renderer.layoutMode, 'explore');
+    assert.equal(layouts, 0);
+    assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), positions);
+    assert.equal(pendingAnimationFrames(), frames);
+    assert.ok(frames > 0);
+    advanceAnimationFrames(5);
+    renderer.setLayoutMode('trace');
+    assert.deepEqual(cy.nodes().map(node => ({ id: node.id(), ...node.position() })), tracePositions);
+    assert.equal(cy.$id('a').visible(), false);
+  }],
   ['heat uses actual count distances on a continuous blue-to-red scale, including equal counts', (cy, renderer) => {
     renderer.setHotCounts({ root: 1, a: 2, b: 500, t: 1000, other: 2, unknown: 1000000 });
     assert.deepEqual(renderer.heatRange, { min: 1, max: 1000 });

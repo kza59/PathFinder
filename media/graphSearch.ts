@@ -25,17 +25,33 @@ export class GraphSearch {
     this.clearHighlight();
     this.query = input.trim().toLowerCase();
     this.index = -1;
+    this.ids = this.matches();
+    return this.move(1);
+  }
+
+  /** Update visibility-dependent results without moving the viewport or changing the query. */
+  public refresh(): SearchState {
+    const currentId = this.ids[this.index];
+    this.ids = this.matches();
+    const currentIndex = this.ids.indexOf(currentId);
+    this.index = currentIndex >= 0 ? currentIndex : this.ids.length ? 0 : -1;
+    if (this.highlightedId !== undefined && !this.ids.includes(this.highlightedId)) {
+      this.clearHighlight();
+    }
+    return this.publish();
+  }
+
+  private matches(): string[] {
     const exact: string[] = [];
     const partial: string[] = [];
     if (this.query) {
-      for (const node of this.cy.nodes()) {
+      for (const node of this.cy.nodes(':visible')) {
         const label = (node.data() as GraphNode).label.toLowerCase();
         if (label === this.query) exact.push(node.id());
         else if (label.includes(this.query)) partial.push(node.id());
       }
     }
-    this.ids = [...exact, ...partial];
-    return this.move(1);
+    return [...exact, ...partial];
   }
 
   public move(direction: 1 | -1): SearchState {
@@ -56,6 +72,10 @@ export class GraphSearch {
       this.highlightedId = node.id();
       this.highlightTimer = setTimeout(() => this.clearHighlight(), 1500);
     }
+    return this.publish();
+  }
+
+  private publish(): SearchState {
     const state: SearchState = {
       query: this.query,
       count: this.ids.length,

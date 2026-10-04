@@ -15,7 +15,7 @@ export interface GraphNode {
   endLine: number;  // 1-based last line of the function body
   recursionGroup?: number; // set on nodes in a recursive structure; members of the same cycle share the number
   hiddenCallers?: number;  // callers that exist but were left out (depth or node limit reached); the graph is cut off here
-  noise?: true;            // usually uninteresting: top-level <module> code, constructors/destructors, tests
+  noise?: boolean;         // usually uninteresting: top-level <module> code, constructors/destructors, tests
   chokepoint?: true;       // every path to the target passes through here: one breakpoint here catches them all
 }
 

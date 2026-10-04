@@ -159,6 +159,10 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
         'overlay-color': '#4fc1ff', 'overlay-opacity': 0.25, 'overlay-padding': 12,
       },
     },
+    {
+      selector: '.noise-hidden',
+      style: { display: 'none' },
+    },
   ];
 }
 
@@ -167,6 +171,7 @@ export class GraphRenderer {
   private hotCounts = new Map<string, number>();
   public heatRange: HeatRange | undefined;
   private hoveredId: string | undefined;
+  private showNoise = false;
   private mode: LayoutMode = 'trace';
   private exploreLayout?: Layouts;
   private staticPositions = new Map<string, { x: number; y: number }>();
@@ -179,6 +184,7 @@ export class GraphRenderer {
     private readonly pathChanged: (current: GraphNode | undefined, active: boolean) => void = () => {},
     searchChanged: (state: SearchState) => void = () => {},
     private readonly heatChanged: (range: HeatRange | undefined) => void = () => {},
+    private readonly visibilityChanged: (nodeCount: number) => void = () => {},
   ) {
     this.cy.autoungrabify(true);
     this.search = new GraphSearch(cy, searchChanged);
@@ -186,6 +192,31 @@ export class GraphRenderer {
 
   public get layoutMode(): LayoutMode {
     return this.mode;
+  }
+
+  public get visibleNodeCount(): number {
+    return this.cy.nodes(':visible').length;
+  }
+
+  public setShowNoise(show: boolean): void {
+    if (this.showNoise === show) return;
+    this.showNoise = show;
+    this.cy.batch(() => this.applyNoiseVisibility());
+    // Class styles are lazy; resolve them before querying cached visibility for search and counts.
+    this.cy.elements().forEach(element => element.style('display'));
+    if (this.hoveredId !== undefined && this.cy.getElementById(this.hoveredId).hidden()) {
+      this.hoverNode();
+    }
+    this.search.refresh();
+    this.visibilityChanged(this.visibleNodeCount);
+  }
+
+  private applyNoiseVisibility(): void {
+    this.cy.elements().removeClass('noise-hidden');
+    if (this.showNoise) return;
+    const noise = this.cy.nodes().filter(node => node.data('noise') === true);
+    noise.addClass('noise-hidden');
+    noise.connectedEdges().addClass('noise-hidden');
   }
 
   public setLayoutMode(mode: LayoutMode): void {
@@ -283,6 +314,7 @@ export class GraphRenderer {
     this.cy.batch(() => {
       this.cy.elements().remove();
       this.cy.add(elements);
+      this.applyNoiseVisibility();
     });
     if (this.cy.nodes().length) {
       this.cy.layout({
@@ -294,7 +326,7 @@ export class GraphRenderer {
     if (this.mode === 'explore') this.applyLayoutMode();
     this.highlightPath(this.path);
     this.applyHotCounts();
-    this.graphRendered(this.cy.nodes().length);
+    this.graphRendered(this.visibleNodeCount);
   }
 
   public setHotCounts(counts: HotCounts): void {
@@ -365,7 +397,7 @@ export class GraphRenderer {
 
   public hoverNode(id?: string): void {
     const node = id === undefined ? undefined : this.cy.getElementById(id);
-    const nextId = node?.isNode() ? id : undefined;
+    const nextId = node?.isNode() && node.visible() ? id : undefined;
     if (this.hoveredId === nextId) return;
     this.hoveredId = nextId;
     this.cy.batch(() => this.applyHover());
@@ -375,7 +407,7 @@ export class GraphRenderer {
     this.cy.elements().removeClass('hover-faded hover-neighbor hovered hover-in hover-out');
     if (this.hoveredId === undefined) return;
     const node = this.cy.getElementById(this.hoveredId);
-    if (!node.isNode()) return;
+    if (!node.isNode() || node.hidden()) return;
     const connections = node.connectedEdges();
     this.cy.elements().addClass('hover-faded');
     connections.connectedNodes().removeClass('hover-faded').addClass('hover-neighbor');
@@ -397,6 +429,7 @@ export function initializeGraphWebview(): void {
   const searchStatus = document.getElementById('search-status')!;
   const searchPrevious = document.getElementById('search-previous') as HTMLButtonElement;
   const searchNext = document.getElementById('search-next') as HTMLButtonElement;
+  const showNoise = document.getElementById('show-noise') as HTMLInputElement;
   const theme = getComputedStyle(document.body);
   const foreground = theme.getPropertyValue('--vscode-editor-foreground').trim() || '#d4d4d4';
   const palette = heatPalette(foreground);
@@ -418,9 +451,14 @@ export function initializeGraphWebview(): void {
     minZoom: 0.05,
     maxZoom: 3,
   });
-  const renderer = new GraphRenderer(cy, count => {
+  const updateEmpty = (count: number) => {
     empty.hidden = count > 0;
-    empty.textContent = 'No functions in this graph';
+    empty.textContent = cy.nodes().length && !count
+      ? 'Noise functions are hidden. Enable Show Noise to display them.'
+      : 'No functions in this graph';
+  };
+  const renderer = new GraphRenderer(cy, count => {
+    updateEmpty(count);
     selection.textContent = 'Click a function to see its source location';
     searchInput.value = '';
     renderLayoutLabels();
@@ -454,7 +492,7 @@ export function initializeGraphWebview(): void {
         : 'Linear scale for this graph; colors rescale as counts change.';
     }
     if (tooltipNodeId !== undefined) refreshTooltipCount();
-  });
+  }, updateEmpty);
 
   searchInput.addEventListener('input', () => renderer.search.find(searchInput.value));
   document.getElementById('search-form')!.addEventListener('submit', event => {
@@ -550,6 +588,11 @@ export function initializeGraphWebview(): void {
     renderer.hoverNode();
   };
 
+  showNoise.addEventListener('change', () => {
+    hideTooltip();
+    renderer.setShowNoise(showNoise.checked);
+  });
+
   cy.on('mouseover', 'node', event => {
     const node = event.target.data() as GraphNode;
     tooltipNodeId = node.id;
@@ -615,8 +658,8 @@ export function initializeGraphWebview(): void {
   }
   // --- end legend feature ---
   document.getElementById('fit')!.addEventListener('click', () => {
-    if (cy.nodes().length) {
-      cy.fit(undefined, layoutOptions.padding);
+    if (renderer.visibleNodeCount) {
+      cy.fit(cy.elements(':visible'), layoutOptions.padding);
     }
   });
   const observer = new ResizeObserver(() => cy.resize());

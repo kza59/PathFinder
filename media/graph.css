@@ -39,6 +39,24 @@ header button { flex: none; }
   gap: 12px;
 }
 
+.noise-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#show-noise {
+  margin: 0;
+  accent-color: var(--vscode-button-background, #0e639c);
+}
+
+#show-noise:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 2px;
+}
+
 #search-form {
   display: flex;
   align-items: center;
