@@ -32,7 +32,7 @@ function recursionGroups(members: (readonly [string, number | undefined])[]): st
 
 function describe(graph: CallGraph | undefined) {
   return {
-    nodes: (graph?.nodes.map(n => `${n.id}${n.hiddenCallers ? ` (+${n.hiddenCallers} hidden)` : ''}`) ?? []).sort(),
+    nodes: (graph?.nodes.map(n => `${n.id}${n.noise ? ' (noise)' : ''}${n.hiddenCallers ? ` (+${n.hiddenCallers} hidden)` : ''}`) ?? []).sort(),
     edges: (graph?.edges.map(e => `${e.from} -> ${e.to} @ ${e.lines.join(',')}${e.recursive ? ' (recursive)' : ''}`) ?? []).sort(),
     recursionGroups: recursionGroups(graph?.nodes.map(n => [n.id, n.recursionGroup] as const) ?? []),
   };
@@ -50,7 +50,9 @@ async function runCase(root: string, c: Case): Promise<boolean> {
     return makeNodeId(path.join(root, id.slice(0, split)), id.slice(split + 2));
   };
   const expected = JSON.stringify({
-    nodes: c.nodes.map(id => `${abs(id)}${c.hiddenCallers?.[id] ? ` (+${c.hiddenCallers[id]} hidden)` : ''}`).sort(),
+    // <module> (top-level code) is always noise, so cases only list the other noise nodes.
+    nodes: c.nodes.map(id => `${abs(id)}${c.noise?.includes(id) || id.endsWith('::<module>') ? ' (noise)' : ''}`
+      + `${c.hiddenCallers?.[id] ? ` (+${c.hiddenCallers[id]} hidden)` : ''}`).sort(),
     edges: c.edges.map(([f, t, lines]) => {
       // An edge is recursive exactly when both ends are in the same expected group.
       const recursive = (c.recursionGroups ?? []).some(g => g.includes(f) && g.includes(t));
