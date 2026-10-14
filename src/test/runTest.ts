@@ -16,7 +16,7 @@ import { DEBUG_CASES } from './debugCases';
 const DISABLED_EXTENSIONS = [
   // An installed (packaged) copy of PathFinder would claim the command names first, and the copy under test would
   // then fail to start.
-  'pathfinder-team.pathfinder',
+  'pathfinder-team-stormhacks.pathfinder-stormhacks',
   'ms-toolsai.jupyter',
   'stmicroelectronics.stm32-vscode-extension',
   'stmicroelectronics.stm32cube-ide-build-analyzer',

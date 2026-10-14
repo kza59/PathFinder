@@ -170,6 +170,17 @@ const crashGraph = (ext: string, mainImportLine: number, importerLine: number, e
   chokepoints: [`records.${ext}::load_record`],
 });
 
+const untypedGraph = {
+  nodes: ['animals.py::Dog.speak', 'main.py::typed_owner', 'main.py::untyped_owner', 'main.py::main', 'main.py::<module>'],
+  edges: [
+    ['main.py::typed_owner', 'animals.py::Dog.speak', [5]],
+    ['main.py::untyped_owner', 'animals.py::Dog.speak', [9]],
+    ['main.py::main', 'main.py::typed_owner', [13]],
+    ['main.py::main', 'main.py::untyped_owner', [14]],
+    ['main.py::<module>', 'main.py::main', [17]],
+  ] as ExpectedEdge[],
+};
+
 export const CASES: Record<string, Case[]> = {
   test1: [
     { name: 'python: definition', file: 'sum.py', lineContains: 'def sum', symbol: 'sum', ...pyGraph },
@@ -245,6 +256,11 @@ export const CASES: Record<string, Case[]> = {
       ],
       chokepoints: ['main.py::dog_owner'],
     },
+  ],
+  // Methods called through an object whose type the language server doesn't know (an untyped parameter).
+  'test10/python': [
+    { name: 'python untyped receiver: from the definition', file: 'animals.py', lineContains: 'def speak', symbol: 'speak', ...untypedGraph },
+    { name: 'python untyped receiver: from the unresolved call site', file: 'main.py', lineContains: 'pet.speak', symbol: 'speak', ...untypedGraph },
   ],
   'test4/cpp': [
     {

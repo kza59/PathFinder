@@ -11,7 +11,7 @@
         // Keep Python/Pylance/debugpy and Microsoft C/C++ enabled: call hierarchy and debugging come from them.
         // Keep this list in sync with DISABLED_EXTENSIONS in src/test/runTest.ts.
         // An installed (packaged) copy of PathFinder would claim the command names first and stop this one starting.
-        "--disable-extension=pathfinder-team.pathfinder",
+        "--disable-extension=pathfinder-team-stormhacks.pathfinder-stormhacks",
         "--disable-extension=ms-toolsai.jupyter",
         "--disable-extension=stmicroelectronics.stm32-vscode-extension",
         "--disable-extension=stmicroelectronics.stm32cube-ide-build-analyzer",

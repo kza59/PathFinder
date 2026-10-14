@@ -100,7 +100,8 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p tsconfig.extension.json && tsc -p tsconfig.webview.json && npm run build:webview",
+    "compile": "tsc -p tsconfig.extension.json && tsc -p tsconfig.webview.json && npm run build:extension && npm run build:webview",
+    "build:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=out/extension.js",
     "watch": "tsc -watch -p tsconfig.extension.json",
     "build:webview": "esbuild media/graph.ts --bundle --platform=browser --outfile=out/webview/graph.js",
     "watch:webview": "npm run build:webview -- --watch",

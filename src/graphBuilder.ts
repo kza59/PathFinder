@@ -44,6 +44,10 @@ const CONSTRUCTOR_NAMES = new Set(['__init__', '__new__', '__del__']);
 const TEST_NAME = /^test(_|[A-Z]|$)/; // test_parse, testParse, test
 
 const C_LIKE_EXTENSIONS = new Set(['.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hh', '.hxx']);
+const SOURCE_EXCLUDE = '**/{node_modules,.git,.venv,venv,env,__pycache__,site-packages,build,out,dist}/**';
+const MAX_SCANNED_FILES = 5000;
+
+const FUNCTION_KINDS = new Set([vscode.SymbolKind.Function, vscode.SymbolKind.Method, vscode.SymbolKind.Constructor]);
 
 // Symbols whose names become part of a qualified name (classes, namespaces, enclosing functions).
 const CONTAINER_KINDS = new Set([
@@ -66,6 +70,19 @@ function inWorkspace(uri: vscode.Uri): boolean {
 
 function locationKey(item: vscode.CallHierarchyItem): string {
   return `${item.uri.toString()}#${item.selectionRange.start.line}`;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** The call hierarchy item for the function whose name is on `line` (0-based) of `uri`, found by searching for the name. */
+async function prepareAtName(uri: vscode.Uri, line: number, name: string): Promise<vscode.CallHierarchyItem | undefined> {
+  const text = (await vscode.workspace.openTextDocument(uri)).lineAt(line).text;
+  const column = Math.max(text.search(new RegExp(`\\b${escapeRegExp(name)}\\b`)), 0);
+  const items = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
+    'vscode.prepareCallHierarchy', uri, new vscode.Position(line, column)) ?? [];
+  return items.find(i => i.selectionRange.start.line === line) ?? items[0];
 }
 
 function describeItem(item: vscode.CallHierarchyItem): string {
@@ -102,6 +119,9 @@ class GraphBuilder {
    * declaration) instead of the body. Resolve to the definition so a function has exactly one node.
    */
   async toDefinition(item: vscode.CallHierarchyItem): Promise<vscode.CallHierarchyItem> {
+    if (item.kind === vscode.SymbolKind.File || item.kind === vscode.SymbolKind.Module) {
+      return item; // top-level code is already where it is
+    }
     const targets = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
       'vscode.executeDefinitionProvider', item.uri, item.selectionRange.start) ?? [];
     const locations = targets.map(t => 'targetUri' in t
@@ -188,10 +208,101 @@ class GraphBuilder {
     const containers = chain.filter(s => CONTAINER_KINDS.has(s.kind)).map(s => stripSignature(s.name));
     // The C/C++ extension lists out-of-line members (`void Dog::speak() const {}`) at the top level as
     // "speak() const" and puts the owning class in `detail` ("Dog").
-    if (cLike && containers.length === 0 && !leaf.includes('::') && self?.detail) {
-      containers.push(self.detail);
+    // Inside a namespace (`namespace geo { int Square::area() {} }`) the chain holds only the namespace.
+    const owner = self?.detail ? stripSignature(self.detail) : '';
+    const inClass = chain.some(s => s.kind === vscode.SymbolKind.Class || s.kind === vscode.SymbolKind.Struct);
+    if (cLike && owner && !inClass && !leaf.includes('::')) {
+      const prefix = containers.join('::');
+      if (prefix && (owner === prefix || owner.startsWith(prefix + '::'))) {
+        containers.length = 0; // detail is already fully qualified ("geo::Square")
+      }
+      if (owner !== prefix) {
+        containers.push(owner);
+      }
     }
     return [...containers, leaf].join(separator);
+  }
+
+  private readonly sourceCache = new Map<string, Promise<{ uri: vscode.Uri; text: string }[]>>();
+
+  /** Workspace source files in the same language family as `uri`, read once per build. */
+  private sources(uri: vscode.Uri): Promise<{ uri: vscode.Uri; text: string }[]> {
+    const ext = path.extname(uri.fsPath).toLowerCase();
+    const extensions = C_LIKE_EXTENSIONS.has(ext) ? [...C_LIKE_EXTENSIONS] : [ext];
+    const key = extensions.join(',');
+    let files = this.sourceCache.get(key);
+    if (!files) {
+      const glob = `**/*{${extensions.join(',')}}`;
+      files = Promise.resolve(vscode.workspace.findFiles(glob, SOURCE_EXCLUDE, MAX_SCANNED_FILES)).then(uris =>
+        Promise.all(uris.map(async u => ({ uri: u, text: new TextDecoder().decode(await vscode.workspace.fs.readFile(u)) }))));
+      this.sourceCache.set(key, files);
+    }
+    return files;
+  }
+
+  /**
+   * Method calls the language server could not tie to `item` because it doesn't know the object's type
+   * (`def f(shape): shape.speak()`): `.speak(` / `->speak(` call sites whose name has no definition at all.
+   * Calls that resolve to some other function are left out, so a same-named method elsewhere doesn't add callers.
+   */
+  async unresolvedCallers(item: vscode.CallHierarchyItem, known: vscode.CallHierarchyIncomingCall[]): Promise<vscode.CallHierarchyIncomingCall[]> {
+    if (item.kind !== vscode.SymbolKind.Method && !/::|\./.test(await this.qualifiedName(item))) {
+      return []; // only methods are called through an object
+    }
+    const name = lastSegment(stripSignature(item.name));
+    const knownSites = new Set(known.flatMap(c => c.fromRanges.map(r => `${c.from.uri.toString()}#${r.start.line}`)));
+    const pattern = new RegExp(`(?:\\.|->)\\s*(${escapeRegExp(name)})\\s*\\(`, 'g');
+    const byCaller = new Map<string, vscode.CallHierarchyIncomingCall>();
+    for (const { uri, text } of await this.sources(item.uri)) {
+      if (!text.includes(name)) {
+        continue;
+      }
+      let document: vscode.TextDocument | undefined;
+      for (const match of text.matchAll(pattern)) {
+        document ??= await vscode.workspace.openTextDocument(uri);
+        const start = document.positionAt(match.index! + match[0].indexOf(match[1], 1));
+        if (knownSites.has(`${uri.toString()}#${start.line}`)) {
+          continue;
+        }
+        const definitions = await vscode.commands.executeCommand<unknown[]>('vscode.executeDefinitionProvider', uri, start) ?? [];
+        if (definitions.length > 0) {
+          continue; // resolved: either already a known caller, or a call to a different function
+        }
+        const caller = await this.callerAt(document, start.line);
+        if (!caller) {
+          continue;
+        }
+        const range = new vscode.Range(start, start.translate(0, name.length));
+        const key = locationKey(caller);
+        const call = byCaller.get(key);
+        if (call) {
+          call.fromRanges.push(range);
+        } else {
+          byCaller.set(key, new vscode.CallHierarchyIncomingCall(caller, [range]));
+        }
+      }
+    }
+    const found = [...byCaller.values()];
+    if (found.length) {
+      this.trace(`  unresolved calls to ${name}: ${found.map(c => describeItem(c.from)).join(', ')}`);
+    }
+    return found;
+  }
+
+  /** The function containing `line` as a call hierarchy item, or the file itself for top-level code. */
+  private async callerAt(document: vscode.TextDocument, line: number): Promise<vscode.CallHierarchyItem | undefined> {
+    const position = await enclosingFunctionPosition(document.uri, line);
+    if (position) {
+      const [item] = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
+        'vscode.prepareCallHierarchy', document.uri, position) ?? [];
+      return item;
+    }
+    if (C_LIKE_EXTENSIONS.has(path.extname(document.uri.fsPath).toLowerCase())) {
+      return undefined; // C/C++ has no top-level code that runs
+    }
+    const whole = new vscode.Range(0, 0, document.lineCount, 0);
+    return new vscode.CallHierarchyItem(vscode.SymbolKind.File, path.basename(document.uri.fsPath), '', document.uri,
+      whole, new vscode.Range(0, 0, 0, 0));
   }
 
   /** The id of the node already built for this item's location, if any. */
@@ -314,11 +425,13 @@ async function expandLevel(builder: GraphBuilder, entries: Entry[], mayAdd: bool
   // One request at a time: the C/C++ extension answers overlapping call-hierarchy requests with nothing.
   const levels: { id: string; calls: vscode.CallHierarchyIncomingCall[] }[] = [];
   for (const { item, id } of entries) {
-    levels.push({
-      id,
-      calls: await vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[]>(
-        'vscode.provideIncomingCalls', item) ?? [],
-    });
+    if (item.kind === vscode.SymbolKind.File || item.kind === vscode.SymbolKind.Module) {
+      levels.push({ id, calls: [] }); // top-level code has no callers
+      continue;
+    }
+    const calls = await vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[]>(
+      'vscode.provideIncomingCalls', item) ?? [];
+    levels.push({ id, calls: [...calls, ...await builder.unresolvedCallers(item, calls)] });
   }
 
   const next: Entry[] = [];
@@ -374,16 +487,34 @@ async function itemForNode(node: GraphNode): Promise<vscode.CallHierarchyItem | 
   if (node.label === MODULE_NAME) {
     return undefined; // top-level code has no callers
   }
-  const uri = vscode.Uri.file(node.file);
-  const text = (await vscode.workspace.openTextDocument(uri)).lineAt(node.line - 1).text;
-  const name = lastSegment(node.label).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const column = Math.max(text.search(new RegExp(`\\b${name}\\b`)), 0);
-  const items = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
-    'vscode.prepareCallHierarchy', uri, new vscode.Position(node.line - 1, column)) ?? [];
-  return items.find(i => i.selectionRange.start.line === node.line - 1) ?? items[0];
+  return prepareAtName(vscode.Uri.file(node.file), node.line - 1, lastSegment(node.label));
 }
 
-const FUNCTION_KINDS = new Set([vscode.SymbolKind.Function, vscode.SymbolKind.Method, vscode.SymbolKind.Constructor]);
+/**
+ * The functions named like the word at `position`, for when the language server can't resolve it there:
+ * typically `shape.speak()` where the type of `shape` is unknown. Every same-named workspace function is a target.
+ */
+async function prepareByName(uri: vscode.Uri, position: vscode.Position): Promise<vscode.CallHierarchyItem[]> {
+  const document = await vscode.workspace.openTextDocument(uri);
+  const range = document.getWordRangeAtPosition(position, /[A-Za-z_~][A-Za-z0-9_]*/);
+  if (!range) {
+    return [];
+  }
+  const name = document.getText(range);
+  const symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+    'vscode.executeWorkspaceSymbolProvider', name) ?? [];
+  const items = new Map<string, vscode.CallHierarchyItem>();
+  for (const symbol of symbols) {
+    if (FUNCTION_KINDS.has(symbol.kind) && inWorkspace(symbol.location.uri)
+        && lastSegment(stripSignature(symbol.name)) === name) {
+      const item = await prepareAtName(symbol.location.uri, symbol.location.range.start.line, name);
+      if (item) {
+        items.set(locationKey(item), item);
+      }
+    }
+  }
+  return [...items.values()];
+}
 
 /**
  * Where the name of the innermost function containing `line` (0-based) is, for running PathFind from any line inside
@@ -418,13 +549,17 @@ export async function buildCallGraph(
   position: vscode.Position,
   { maxDepth = DEFAULT_MAX_DEPTH, maxNodes = DEFAULT_MAX_NODES, token, trace }: BuildOptions = {},
 ): Promise<CallGraph | undefined> {
-  const prepared = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
-    'vscode.prepareCallHierarchy', uri, position);
-  if (!prepared?.length) {
+  let prepared = await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
+    'vscode.prepareCallHierarchy', uri, position) ?? [];
+  const builder = new GraphBuilder(trace);
+  if (!prepared.length) {
+    prepared = await prepareByName(uri, position);
+    builder.trace(`not resolved at the cursor; by name: ${prepared.length ? prepared.map(describeItem).join(', ') : 'none'}`);
+  }
+  if (!prepared.length) {
     return undefined;
   }
 
-  const builder = new GraphBuilder(trace);
   prepared.forEach(item => builder.trace(`prepared: ${describeItem(item)}`));
   const frontier: Entry[] = [];
   const targetIds = new Set<string>();

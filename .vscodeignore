@@ -1,5 +1,5 @@
 # Files left out of the .vsix. Everything not listed here ships.
-# Runtime needs: out/** (compiled extension + webview bundle), python/**, gdb/**, media/*.css,
+# Runtime needs: out/extension.js + out/webview/** (bundles), python/**, gdb/**, media/*.css,
 # package.json, README.md, LICENSE.
 
 # Private local settings (Claude Code) - must never ship
@@ -28,11 +28,11 @@ test5/**
 test6/**
 test7/**
 test8/**
-# Compiled tests, except the two modules extension.js loads at startup
-# (graphRendererTest registers the "PathFind: Test ..." commands and imports mockdata).
+test9/**
+test10/**
+# Compiled tests. extension.js is an esbuild bundle (npm run build:extension) that already contains everything it
+# imports, including the AI SDKs from node_modules, so the rest of tsc's out/ isn't needed either.
 out/test/**
-!out/test/graphRendererTest.js
-!out/test/mockdata.js
 
 # Not needed at runtime
 node_modules/**
