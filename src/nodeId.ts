@@ -22,3 +22,17 @@ export function normalizePath(fsPath: string): string {
 export function makeNodeId(fsPath: string, functionName: string): string {
   return `${normalizePath(fsPath)}::${functionName}`;
 }
+
+/**
+ * Dedup key for "the definition at this location", used to recognise a call hierarchy item we have
+ * already seen.
+ *
+ * The module/file item that top-level code is reported from starts at the top of the document,
+ * which is the same line as a function defined on line 1. Keying on uri+line alone therefore makes
+ * the two the same definition, and the module's calls get attributed to that function - inventing a
+ * call edge out of it and, with the real call back into it, a two-node cycle that reads as mutual
+ * recursion. So the key records which of the two it is.
+ */
+export function definitionKey(uri: string, zeroBasedLine: number, isModule: boolean): string {
+  return `${uri}#${zeroBasedLine}#${isModule ? MODULE_NAME : 'def'}`;
+}

@@ -2,6 +2,7 @@
 import * as assert from 'assert';
 import type { CallGraph } from '../graphBuilder';
 import { markRecursion, recursionDepth } from '../recursion';
+import { definitionKey } from '../nodeId';
 
 /** Builds a graph from "a->b" strings; node order is first appearance. */
 function graph(...edges: string[]): CallGraph {
@@ -124,6 +125,24 @@ const cases: [string, () => void][] = [
   }],
   ['depth: 100 nested calls report depth 99', () => {
     assert.strictEqual(recursionDepth(Array(100).fill('countdown'), test5())[0].depth, 99);
+  }],
+  // Regression: "main calls add, add returns" was being reported as mutual recursion.
+  ['no recursion: a plain call-then-return is not a cycle', () => {
+    assert.deepStrictEqual(summary(markRecursion(graph('main->add'))), { groups: [], recursiveEdges: [] });
+    // The real shape of that script: top-level code calls main, which calls add.
+    assert.deepStrictEqual(summary(markRecursion(graph('<module>->main', 'main->add'))),
+      { groups: [], recursiveEdges: [] });
+  }],
+  ['a module and a function defined on line 1 are different definitions', () => {
+    // The false recursion above came from node identity, not from the cycle detector: both the
+    // module item and a line-1 `def` start at line 0, so a uri+line key merged them and the
+    // module's call to main was attributed to add, closing a main <-> add loop.
+    const uri = 'file:///proj/app.py';
+    assert.notStrictEqual(definitionKey(uri, 0, true), definitionKey(uri, 0, false));
+    // Still the same definition when it really is the same one, and still line-sensitive.
+    assert.strictEqual(definitionKey(uri, 0, false), definitionKey(uri, 0, false));
+    assert.notStrictEqual(definitionKey(uri, 0, false), definitionKey(uri, 1, false));
+    assert.notStrictEqual(definitionKey(uri, 0, true), definitionKey('file:///proj/other.py', 0, true));
   }],
 ];
 
