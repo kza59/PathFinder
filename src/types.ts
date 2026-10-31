@@ -15,6 +15,15 @@ export type DebugPath = string[];
 export type HotCounts = Record<string, number>;
 // --- end hot-path counting ---
 
+// --- return values feature ---
+/**
+ * The latest value each function returned, per graph node id, formatted in the user's process by
+ * python/pathfinder_hot/sitecustomize.py. Absent until a call of that function has returned; a
+ * function that only ever raises never appears. Rides the hot-path channel, so Python only.
+ */
+export type ReturnValues = Record<string, string>;
+// --- end return values feature ---
+
 // --- call values feature ---
 /** One parameter of a paused call, for the tooltip. */
 export interface CallArg {
@@ -70,7 +79,7 @@ export type GraphMessage =
   | { type: 'callerPreviews'; previews: Record<string, CallerExpansionPreview> }
   | { type: 'debugPath'; path: DebugPath; crashed?: boolean } // crashed: the program stopped because of an exception
   | { type: 'debugClear' }
-  | { type: 'hotCounts'; counts: HotCounts } // hot-path counting
+  | { type: 'hotCounts'; counts: HotCounts; returns?: ReturnValues } // hot-path counting + return values feature
   | { type: 'callValues'; values: CallValues } // call values feature
   | { type: 'breakpoints'; counts: BreakpointCounts } // breakpoint markers
   | SessionHistoryMessage; // session history

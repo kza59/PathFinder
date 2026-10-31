@@ -10,7 +10,12 @@ import { recursionAnnouncement, recursionColor, recursionOutlines } from './recu
 import { recursionDepth, type RecursionDepth } from '../src/recursion';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
-import type { BreakpointCounts, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, WebviewMessage } from '../src/types';
+import type { BreakpointCounts, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, ReturnValues, WebviewMessage } from '../src/types';
+import { shortenValue } from '../src/callValues'; // return values feature (no vscode imports there)
+
+// --- return values feature ---
+const MAX_RETURN = 22; // characters of the value on the node; the hook already capped it at 120
+// --- end return values feature ---
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
 
@@ -35,6 +40,10 @@ export const layoutOptions = {
 const nodeLabel = (node: NodeSingular): string => [
   `${node.hasClass('chokepoint') ? '◇ ' : ''}${node.data('label')}`,
   ...(node.data('callArgs') ? [node.data('callArgs') as string] : []), // call values feature
+  // --- return values feature --- its own line: unlike the args line it does not need a pause,
+  // so it has to stand on its own when the program is simply running.
+  ...(node.data('callReturn') ? [node.data('callReturn') as string] : []),
+  // --- end return values feature ---
 ].join('\n');
 
 export function graphStyles(foreground = '#d4d4d4', background = '#252526'): StylesheetJson {
@@ -66,6 +75,12 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
       style: { 'font-size': '12px', 'text-overflow-wrap': 'anywhere' },
     },
     // --- end call values feature ---
+    // --- return values feature --- the return line needs the same smaller type as the args line
+    {
+      selector: 'node.has-return',
+      style: { 'font-size': '12px', 'text-overflow-wrap': 'anywhere' },
+    },
+    // --- end return values feature ---
     // --- breakpoint markers --- a dot in the top-left corner. Drawn as a background image, so it composes
     // with every other state (path/current/target use the border, hover/selection the underlay, heat the fill).
     {
@@ -431,6 +446,7 @@ export class GraphRenderer {
     this.applyCallValues(); // call values feature
     this.applyCallLocals(); // local variables feature
     this.applyBreakpoints(); // breakpoint markers
+    this.applyReturnValues(); // return values feature
     this.highlightPath(this.path);
     this.applyHotCounts();
     this.graphRendered(this.visibleNodeCount);
@@ -445,6 +461,32 @@ export class GraphRenderer {
   public getHotCount(id: string): number | undefined {
     return this.hotCounts.get(id);
   }
+
+  // --- return values feature ---
+  private returnValues: ReturnValues = {};
+
+  /** The full captured value (the node line is shortened); undefined until a call has returned. */
+  public returnValue(id: string): string | undefined {
+    return Object.prototype.hasOwnProperty.call(this.returnValues, id) ? this.returnValues[id] : undefined;
+  }
+
+  /** Full snapshot, like the counts it arrives with: a node absent from it loses its line. */
+  public setReturnValues(values: ReturnValues): void {
+    this.returnValues = { ...values };
+    this.applyReturnValues();
+  }
+
+  private applyReturnValues(): void {
+    this.cy.batch(() => this.cy.nodes().forEach(node => {
+      const value = this.returnValue(node.id());
+      if (value === undefined) {
+        node.removeData('callReturn').removeClass('has-return');
+      } else {
+        node.data('callReturn', `→ ${shortenValue(value, MAX_RETURN)}`).addClass('has-return');
+      }
+    }));
+  }
+  // --- end return values feature ---
 
   private applyHotCounts(): void {
     const counted: { node: NodeSingular; count: number }[] = [];
@@ -1048,6 +1090,7 @@ export function initializeGraphWebview(): void {
         break;
       case 'hotCounts':
         renderer.setHotCounts(message.counts);
+        renderer.setReturnValues(message.returns ?? {}); // return values feature
         break;
       // --- call values feature ---
       case 'callValues':

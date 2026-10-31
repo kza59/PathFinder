@@ -1123,6 +1123,32 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     });
   }],
   // --- end local variables feature ---
+  // --- return values feature ---
+  ['return values add their own label line, with or without an args line, and clear', (cy, renderer) => {
+    const label = (id: string) => cy.$id(id).style('label') as string;
+    renderer.setReturnValues({ a: '7', b: "'done'", unknown: '1' });
+    assert.equal(label('a'), 'a\n→ 7');
+    assert.equal(label('b'), "b\n→ 'done'");
+    assert.equal(cy.$id('a').hasClass('has-return'), true);
+    assert.equal(cy.$id('t').hasClass('has-return'), false);
+    assert.equal(renderer.returnValue('a'), '7');
+    assert.equal(renderer.returnValue('t'), undefined);
+    // Below the args line when both are present, and both survive a re-render.
+    renderer.setCallValues({ a: { line: '(x=3)', args: [{ name: 'x', value: '3' }], atEntry: false } });
+    assert.equal(label('a'), 'a\n(x=3)\n→ 7');
+    renderer.renderGraph(fixture);
+    assert.equal(label('a'), 'a\n(x=3)\n→ 7');
+    // A long value is shortened for the node; the full one stays available.
+    renderer.setReturnValues({ a: `[${Array.from({ length: 40 }, (_, i) => i).join(', ')}]` });
+    const shortened = label('a').split('\n')[2];
+    assert.ok(shortened.length <= 24 && shortened.endsWith('…'), shortened);
+    assert.ok(renderer.returnValue('a')!.length > 40);
+    // A full snapshot: a node absent from it loses the line, and the args line is untouched.
+    renderer.setReturnValues({});
+    assert.equal(label('a'), 'a\n(x=3)');
+    assert.equal(cy.$('.has-return').length, 0);
+  }],
+  // --- end return values feature ---
 ];
 
 async function main(): Promise<void> {
