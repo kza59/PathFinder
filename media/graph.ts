@@ -37,13 +37,26 @@ export const layoutOptions = {
   animate: false,
 };
 
+// --- argument vs return feature ---
+// Arguments and the return value are captured by two unrelated mechanisms (a DAP pause and the
+// sys.monitoring hook), but on the node they describe one thing: what went in and what came out.
+// Joined on one line they read as that; the cap keeps the pair inside roughly one rendered line of
+// the node's 160px text box at 12px, so the arrow never ends up stranded at the start of a wrap.
+const FLOW_JOIN_MAX = 26;
+
+/** "(a=3, b=4)" and "→ 7" as one line when they fit, else as the two lines they were. */
+export function flowLines(args: string | undefined, ret: string | undefined): string[] {
+  if (args && ret && `${args} ${ret}`.length <= FLOW_JOIN_MAX) {
+    return [`${args} ${ret}`];
+  }
+  return [...(args ? [args] : []), ...(ret ? [ret] : [])];
+}
+// --- end argument vs return feature ---
+
 const nodeLabel = (node: NodeSingular): string => [
   `${node.hasClass('chokepoint') ? '◇ ' : ''}${node.data('label')}`,
-  ...(node.data('callArgs') ? [node.data('callArgs') as string] : []), // call values feature
-  // --- return values feature --- its own line: unlike the args line it does not need a pause,
-  // so it has to stand on its own when the program is simply running.
-  ...(node.data('callReturn') ? [node.data('callReturn') as string] : []),
-  // --- end return values feature ---
+  // call values feature (args) + return values feature (ret), paired by the argument vs return feature
+  ...flowLines(node.data('callArgs') as string | undefined, node.data('callReturn') as string | undefined),
 ].join('\n');
 
 export function graphStyles(foreground = '#d4d4d4', background = '#252526'): StylesheetJson {
