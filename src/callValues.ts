@@ -1,4 +1,4 @@
-import type { CallArg, CallValue, CallValues } from './types';
+import type { CallArg, CallValue, CallValues, VariableChildren } from './types';
 
 /**
  * Call values (Python only): labels graph nodes with the argument values of the calls that are on
@@ -38,6 +38,10 @@ const MAX_LOCAL_ROW = 34;    // one band row, so a long value can't reach the ne
 const MAX_LOCAL_ROWS = 5;    // rows on the node before "+N more" (ROW_GAP leaves room for five)
 const MAX_LOCALS_LIST = 20;  // locals in the tooltip, which also bounds the callValues message
 // --- end local variables feature ---
+
+// --- expand complex variables feature ---
+export const MAX_CHILDREN = 50; // children fetched per page, which also bounds one response
+// --- end expand complex variables feature ---
 
 export interface Param {
   name: string;                            // bare name, as debugpy lists it in Locals
@@ -158,12 +162,17 @@ export function formatCallValue(
   signature: Signature,
   locals: ReadonlyMap<string, string>,
   pausedLine: number,
+  meta?: ReadonlyMap<string, VarMeta>, // expand complex variables feature
 ): CallValue {
   const args: CallArg[] = signature.params.map(param => {
     const value = locals.get(param.name);
     // The tooltip gets debugpy's value as is (addresses kept), only capped.
     const full = value !== undefined && value.length > MAX_FULL ? `${value.slice(0, MAX_FULL - 1)}…` : value;
-    return { name: displayName(param), ...(full === undefined ? {} : { value: full }) };
+    return {
+      name: displayName(param),
+      ...(full === undefined ? {} : { value: full }),
+      ...(meta?.get(param.name) ?? {}), // expand complex variables feature: omitted when scalar
+    };
   });
   const isMethod = label.includes('.');
   const parts = signature.params.flatMap((param, index) => {
@@ -236,6 +245,7 @@ function isScalarValue(value: string): boolean {
 export function formatCallLocals(
   signature: Signature,
   locals: ReadonlyMap<string, string>,
+  meta?: ReadonlyMap<string, VarMeta>, // expand complex variables feature
 ): Required<Pick<CallValue, 'localsRows' | 'locals' | 'localsCount'>> | undefined {
   const params = new Set(signature.params.map(param => param.name));
   const extras = [...locals].filter(([name]) => !params.has(name) && !isPseudoLocal(name));
@@ -257,6 +267,7 @@ export function formatCallLocals(
     locals: extras.slice(0, MAX_LOCALS_LIST).map(([name, value]) => ({
       name,
       value: value.length > MAX_FULL ? `${value.slice(0, MAX_FULL - 1)}…` : value,
+      ...(meta?.get(name) ?? {}), // expand complex variables feature
     })),
     localsCount: extras.length,
   };
@@ -274,6 +285,10 @@ export interface DapScope {
 export interface DapVariable {
   name: string;
   value: string;
+  // --- expand complex variables feature --- the adapter always sends these; we used to drop them
+  variablesReference?: number; // > 0 when the value has children
+  type?: string;
+  // --- end expand complex variables feature ---
 }
 
 /** One frame's Locals scope, as read at a pause. */
@@ -281,7 +296,26 @@ export interface FrameLocals {
   values: Map<string, string>;
   /** local variables feature: the scope was identified as Locals, not guessed by the fallback. */
   trusted: boolean;
+  /** expand complex variables feature: ref/type per name, kept beside `values` so the formatters
+   *  that only ever wanted the string stay exactly as they were. */
+  meta: Map<string, VarMeta>;
 }
+
+// --- expand complex variables feature ---
+/** What a variable carries beyond its printed value. */
+export interface VarMeta {
+  ref?: number;
+  type?: string;
+}
+
+/** The ref/type of a DAP variable, with the zero reference normalised away (0 means "no children"). */
+export function varMeta(variable: DapVariable): VarMeta {
+  return {
+    ...(variable.variablesReference && variable.variablesReference > 0 ? { ref: variable.variablesReference } : {}),
+    ...(variable.type ? { type: variable.type } : {}),
+  };
+}
+// --- end expand complex variables feature ---
 
 export interface FrameLike {
   id?: number;
@@ -335,6 +369,11 @@ export class CallValuesCapture {
   private values: CallValues = {};
   private readonly localsByFrame = new Map<number, Promise<FrameLocals | undefined>>();
   private readonly linesByFile = new Map<string, string[] | undefined>();
+  // --- expand complex variables feature ---
+  // Its own cache, keyed by generation so it can never outlive the pause its refs belong to, and
+  // separate from localsByFrame so on-demand expansion cannot disturb the debounced capture.
+  private readonly childrenByRef = new Map<string, Promise<VariableChildren | undefined>>();
+  // --- end expand complex variables feature ---
 
   constructor(private readonly deps: CallValuesDeps) {}
 
@@ -375,7 +414,56 @@ export class CallValuesCapture {
     this.generation++;
     this.localsByFrame.clear();
     this.linesByFile.clear();
+    // --- expand complex variables feature --- every variablesReference just died with the pause
+    this.childrenByRef.clear();
+    // --- end expand complex variables feature ---
   }
+
+  // --- expand complex variables feature ---
+  /**
+   * One page of an expandable variable's children, at the pause its `ref` came from.
+   *
+   * `stale` means the program paused again or resumed while this was in flight, so the reference no
+   * longer refers to anything and the caller must show nothing rather than a wrong value. The same
+   * (ref, page) is fetched once per pause; collapsing and re-expanding costs nothing.
+   */
+  async expand(ref: number, start = 0, count = MAX_CHILDREN): Promise<VariableChildren> {
+    const page = Math.max(1, Math.min(count, MAX_CHILDREN));
+    const from = Math.max(0, start);
+    const generation = this.generation;
+    if (!Number.isSafeInteger(ref) || ref <= 0) {
+      return { ref, children: [], stale: true };
+    }
+    const key = `${generation}:${ref}:${from}:${page}`;
+    let pending = this.childrenByRef.get(key);
+    if (!pending) {
+      pending = (async () => {
+        try {
+          // One more than the page, so "are there further children" needs no second request.
+          const { variables } = await this.deps.request('variables', {
+            variablesReference: ref, start: from, count: page + 1,
+          }) as { variables: DapVariable[] };
+          const all = (variables ?? []).filter(variable => !isPseudoLocal(variable.name));
+          const children = all.slice(0, page).map(variable => ({
+            name: variable.name,
+            value: variable.value.length > MAX_FULL ? `${variable.value.slice(0, MAX_FULL - 1)}…` : variable.value,
+            ...varMeta(variable),
+          }));
+          return { ref, children, ...(all.length > page ? { more: all.length - page } : {}) };
+        } catch {
+          return undefined; // the frame is gone, or the adapter refused the reference
+        }
+      })();
+      this.childrenByRef.set(key, pending);
+    }
+    const result = await pending;
+    // Checked after the await as well: the program may have moved on while this was in flight.
+    if (!result || generation !== this.generation) {
+      return { ref, children: [], stale: true };
+    }
+    return result;
+  }
+  // --- end expand complex variables feature ---
 
   private async capture(frames: FrameLike[], generation: number): Promise<void> {
     // Innermost frame of each node wins; deeper recursive frames are only counted.
@@ -404,12 +492,12 @@ export class CallValuesCapture {
       if (!scope) {
         return undefined;
       }
-      const value = formatCallValue(node.label, signature, scope.values, frame.line);
+      const value = formatCallValue(node.label, signature, scope.values, frame.line, scope.meta);
       // Recursion: "(n=1) +3" = three more fact frames further out on the stack.
       const withMore = more ? { ...value, line: `${value.line} +${more}`, more } : value;
       // --- local variables feature --- undefined unless the frame has non-parameter locals, so a
       // parameters-only call is published exactly as it was before this feature.
-      const extras = scope.trusted ? formatCallLocals(signature, scope.values) : undefined;
+      const extras = scope.trusted ? formatCallLocals(signature, scope.values, scope.meta) : undefined;
       // --- end local variables feature ---
       return [node.id, extras ? { ...withMore, ...extras } : withMore] as const;
     }));
@@ -439,12 +527,14 @@ export class CallValuesCapture {
           }
           const { variables } = await this.deps.request('variables', { variablesReference: scope.variablesReference }) as { variables: DapVariable[] };
           const values = new Map<string, string>();
+          const meta = new Map<string, VarMeta>(); // expand complex variables feature
           for (const variable of variables ?? []) {
             if (!values.has(variable.name)) {
               values.set(variable.name, variable.value);
+              meta.set(variable.name, varMeta(variable));
             }
           }
-          return { values, trusted: isLocalsScope(scope) }; // trusted: local variables feature
+          return { values, trusted: isLocalsScope(scope), meta }; // trusted: local variables feature
         } catch {
           return undefined; // e.g. the program resumed and the frame id is gone
         }

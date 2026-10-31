@@ -10,12 +10,17 @@ import { recursionAnnouncement, recursionColor, recursionOutlines } from './recu
 import { recursionDepth, type RecursionDepth } from '../src/recursion';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
-import type { BreakpointCounts, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, ReturnValues, WebviewMessage } from '../src/types';
+import type { BreakpointCounts, CallArg, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, ReturnValues, VariableChildren, WebviewMessage } from '../src/types';
 import { shortenValue } from '../src/callValues'; // return values feature (no vscode imports there)
 
 // --- return values feature ---
 const MAX_RETURN = 22; // characters of the value on the node; the hook already capped it at 120
 // --- end return values feature ---
+
+// --- expand complex variables feature ---
+// A preview, not a tree: the full drill-down belongs in the inspector panel, which has the room.
+const PREVIEW_CHILDREN = 5;
+// --- end expand complex variables feature ---
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
 
@@ -893,6 +898,43 @@ export function initializeGraphWebview(): void {
   const tooltipChokepoint = tooltip.appendChild(document.createElement('div'));
   const tooltipRecursion = tooltip.appendChild(document.createElement('div'));
   const tooltipCalls = tooltip.appendChild(document.createElement('div'));
+  // --- expand complex variables feature ---
+  // Children already fetched for this pause, keyed by variablesReference. Cleared whenever a new
+  // callValues snapshot arrives, because that is exactly when the old references stopped meaning
+  // anything. Read-only: the rows are plain text under a pointer-events: none tooltip.
+  const childrenByRef = new Map<number, VariableChildren>();
+  const requestedRefs = new Set<number>();
+
+  /** Draws an expandable value's first children under its row, asking for them once if needed. */
+  const renderChildren = (host: HTMLElement, arg: CallArg) => {
+    if (!arg.ref) {
+      return;
+    }
+    const known = childrenByRef.get(arg.ref);
+    if (!known) {
+      if (!requestedRefs.has(arg.ref)) {
+        requestedRefs.add(arg.ref);
+        vscode.postMessage({ type: 'expandVariable', ref: arg.ref, start: 0, count: PREVIEW_CHILDREN });
+      }
+      return; // the answer re-renders the tooltip if it is still open on this node
+    }
+    if (known.stale || !known.children.length) {
+      return;
+    }
+    for (const child of known.children.slice(0, PREVIEW_CHILDREN)) {
+      const row = host.appendChild(document.createElement('div'));
+      row.className = 'tooltip-child';
+      row.textContent = `${child.name} = ${child.value ?? ''}`;
+    }
+    const hidden = (known.more ?? 0) + Math.max(0, known.children.length - PREVIEW_CHILDREN);
+    if (hidden > 0) {
+      const row = host.appendChild(document.createElement('div'));
+      row.className = 'tooltip-child tooltip-lines';
+      row.textContent = `+${hidden} more`;
+    }
+  };
+  // --- end expand complex variables feature ---
+
   // --- call values feature ---
   const tooltipArgs = tooltip.appendChild(document.createElement('div'));
   tooltipArgs.className = 'tooltip-args';
@@ -914,6 +956,7 @@ export function initializeGraphWebview(): void {
       const row = tooltipArgs.appendChild(document.createElement('div'));
       row.className = 'tooltip-arg';
       row.textContent = arg.value === undefined ? `${arg.name} = (not in locals)` : `${arg.name} = ${arg.value}`;
+      renderChildren(tooltipArgs, arg); // expand complex variables feature
     }
     const notes = [
       ...(value.more ? [`+${value.more} more ${value.more === 1 ? 'call' : 'calls'} of this function on the stack (showing the innermost)`] : []),
@@ -946,6 +989,7 @@ export function initializeGraphWebview(): void {
       const row = tooltipLocals.appendChild(document.createElement('div'));
       row.className = 'tooltip-local';
       row.textContent = `${local.name} = ${local.value}`;
+      renderChildren(tooltipLocals, local); // expand complex variables feature
     }
     const hidden = (value?.localsCount ?? locals.length) - locals.length;
     if (hidden > 0) {
@@ -964,6 +1008,21 @@ export function initializeGraphWebview(): void {
     tooltipCalls.textContent = count === undefined ? 'No recorded calls' : `Recorded calls this session: ${count.toLocaleString()}`;
     if (!tooltip.hidden && tooltipPosition) moveTooltip(tooltipPosition.x, tooltipPosition.y);
   };
+
+  // --- expand complex variables feature ---
+  /** Redraws the open tooltip's variable sections, e.g. once children have arrived. */
+  const refreshTooltipVariables = () => {
+    if (tooltip.hidden || tooltipNodeId === undefined) {
+      return;
+    }
+    const value = renderer.callValue(tooltipNodeId);
+    renderTooltipArgs(value);
+    renderTooltipLocals(value);
+    if (tooltipPosition) {
+      moveTooltip(tooltipPosition.x, tooltipPosition.y); // the tooltip just changed height
+    }
+  };
+  // --- end expand complex variables feature ---
 
   const TOOLTIP_OFFSET = 14;
   const TOOLTIP_MARGIN = 6;
@@ -1108,7 +1167,19 @@ export function initializeGraphWebview(): void {
       // --- call values feature ---
       case 'callValues':
         renderer.setCallValues(message.values);
+        // --- expand complex variables feature --- a new snapshot means a new pause (or a resume),
+        // so every reference held here is dead; drop them rather than show a stale tree.
+        childrenByRef.clear();
+        requestedRefs.clear();
+        refreshTooltipVariables();
+        // --- end expand complex variables feature ---
         break;
+      // --- expand complex variables feature ---
+      case 'variableChildren':
+        childrenByRef.set(message.result.ref, message.result);
+        refreshTooltipVariables(); // no-op unless the tooltip is still open on that node
+        break;
+      // --- end expand complex variables feature ---
       // --- end call values feature ---
       // --- breakpoint markers ---
       case 'breakpoints':

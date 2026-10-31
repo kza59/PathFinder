@@ -439,6 +439,17 @@ button.path-arrow:hover:not(:disabled) { background: var(--vscode-toolbar-hoverB
 }
 /* --- end local variables feature --- */
 
+/* --- expand complex variables feature --- */
+/* Indented child rows under an expandable value. Read-only text inside the existing tooltip, so
+   the tooltip's pointer-events are untouched and node hover/click/drag are unaffected. */
+#node-tooltip .tooltip-child {
+  margin-left: 14px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+/* --- end expand complex variables feature --- */
+
 /* --- legend feature --- */
 /* --pf-* colors are set from graphStyles() in media/graph.ts, so they always match the graph. */
 #legend {

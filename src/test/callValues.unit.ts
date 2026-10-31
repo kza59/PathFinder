@@ -1,6 +1,6 @@
 // Unit tests for the call values feature (src/callValues.ts). Plain Node, no VS Code: part of `npm run test:unit`.
 import * as assert from 'assert';
-import { CallValuesCapture, formatCallLocals, formatCallValue, isLocalsScope, isPseudoLocal, parseSignature, pickLocalsScope, shortenValue, type CallValuesDeps } from '../callValues';
+import { CallValuesCapture, formatCallLocals, formatCallValue, isLocalsScope, isPseudoLocal, parseSignature, pickLocalsScope, shortenValue, varMeta, type CallValuesDeps } from '../callValues';
 import type { CallValues } from '../types';
 
 const names = (source: string, line = 1) => parseSignature(source.split('\n'), line)?.params.map(p => p.name);
@@ -243,6 +243,99 @@ const cases: [string, () => void | Promise<void>][] = [
     });
   }],
   // --- end local variables feature ---
+  // --- expand complex variables feature ---
+  ['refs and types ride along on args and locals, and scalars carry neither', () => {
+    const sig = parseSignature(['def f(a, b):', '    pass'], 1)!;
+    const meta = new Map([
+      ['a', { ref: 11, type: 'list' }],
+      ['b', { type: 'int' }],      // a scalar: debugpy sends variablesReference 0, so no ref
+      ['items', { ref: 12, type: 'dict' }],
+    ]);
+    const value = formatCallValue('f', sig, locals({ a: '[1, 2]', b: '3' }), 2, meta);
+    assert.deepStrictEqual(value.args, [
+      { name: 'a', value: '[1, 2]', ref: 11, type: 'list' },
+      { name: 'b', value: '3', type: 'int' },
+    ]);
+    const extras = formatCallLocals(sig, locals({ a: '[1, 2]', b: '3', items: '{}' }), meta)!;
+    assert.deepStrictEqual(extras.locals, [{ name: 'items', value: '{}', ref: 12, type: 'dict' }]);
+    // Without a meta map nothing is attached, so an older capture serialises exactly as before.
+    assert.deepStrictEqual(formatCallValue('f', sig, locals({ a: '[1, 2]', b: '3' }), 2).args,
+      [{ name: 'a', value: '[1, 2]' }, { name: 'b', value: '3' }]);
+  }],
+  ['varMeta drops the zero reference that means "no children"', () => {
+    assert.deepStrictEqual(varMeta({ name: 'x', value: '1', variablesReference: 0, type: 'int' }), { type: 'int' });
+    assert.deepStrictEqual(varMeta({ name: 'x', value: '[]', variablesReference: 7 }), { ref: 7 });
+    assert.deepStrictEqual(varMeta({ name: 'x', value: '1' }), {});
+  }],
+  ['expand: children are fetched once per pause, paged, and pseudo rows dropped', async () => {
+    let calls = 0;
+    let lastArgs: Record<string, number> = {};
+    const capture = new CallValuesCapture({
+      debounceMs: 0,
+      request: async (command: string, args: Record<string, number>) => {
+        calls++;
+        lastArgs = args;
+        return { variables: [
+          { name: 'special variables', value: '' },               // debugpy noise: never a child
+          ...Array.from({ length: 8 }, (_, i) => ({
+            name: String(i), value: `v${i}`, variablesReference: i === 0 ? 99 : 0, type: 'int',
+          })),
+        ] };
+      },
+      resolveNode: () => undefined,
+      readLines: () => undefined,
+      publish: () => undefined,
+    } as unknown as CallValuesDeps);
+    capture.paused();
+    const page = await capture.expand(11, 0, 3);
+    assert.strictEqual(page.ref, 11);
+    assert.deepStrictEqual(page.children.map(c => c.name), ['0', '1', '2']);
+    assert.deepStrictEqual(page.children[0], { name: '0', value: 'v0', ref: 99, type: 'int' });
+    assert.strictEqual(page.more, 5); // 8 real children, 3 shown
+    assert.strictEqual(page.stale, undefined);
+    // One over the page is requested, so "is there more" needs no second round-trip.
+    assert.deepStrictEqual(lastArgs, { variablesReference: 11, start: 0, count: 4 });
+    await capture.expand(11, 0, 3);
+    assert.strictEqual(calls, 1); // cached: re-expanding the same page is free
+    await capture.expand(11, 3, 3);
+    assert.strictEqual(calls, 2); // a different page is a different request
+  }],
+  ['expand: a dead reference, a resume, and a late answer all come back stale', async () => {
+    let release: (value: unknown) => void = () => undefined;
+    const capture = new CallValuesCapture({
+      debounceMs: 0,
+      request: () => new Promise(resolve => { release = resolve; }),
+      resolveNode: () => undefined,
+      readLines: () => undefined,
+      publish: () => undefined,
+    } as unknown as CallValuesDeps);
+    capture.paused();
+    // A reference that cannot exist is rejected without troubling the adapter.
+    assert.deepStrictEqual(await capture.expand(0), { ref: 0, children: [], stale: true });
+    assert.deepStrictEqual(await capture.expand(-1), { ref: -1, children: [], stale: true });
+    // In flight when the program resumes: the reference is dead, so the answer must not be shown.
+    const pending = capture.expand(11, 0, 3);
+    capture.resumed();
+    release({ variables: [{ name: '0', value: 'v0' }] });
+    assert.deepStrictEqual(await pending, { ref: 11, children: [], stale: true });
+    // The cache went with the generation, so the next pause refetches rather than reusing it.
+    capture.paused();
+    const next = capture.expand(11, 0, 3);
+    release({ variables: [{ name: '0', value: 'fresh' }] });
+    assert.deepStrictEqual((await next).children, [{ name: '0', value: 'fresh' }]);
+  }],
+  ['expand: an adapter error is stale, not a crash', async () => {
+    const capture = new CallValuesCapture({
+      debounceMs: 0,
+      request: async () => { throw new Error('invalid reference'); },
+      resolveNode: () => undefined,
+      readLines: () => undefined,
+      publish: () => undefined,
+    } as unknown as CallValuesDeps);
+    capture.paused();
+    assert.deepStrictEqual(await capture.expand(11), { ref: 11, children: [], stale: true });
+  }],
+  // --- end expand complex variables feature ---
 ];
 
 void (async () => {

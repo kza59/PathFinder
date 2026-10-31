@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { expandCallers } from '../graphBuilder';
-import type { BreakpointCounts, CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage, ReturnValues, SessionHistoryMessage } from '../types';
+import type { BreakpointCounts, CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage, ReturnValues, SessionHistoryMessage, VariableChildren } from '../types';
 import { callerExpansionPreview } from './callerPreview';
 
 export class PathFindPanel implements vscode.Disposable {
@@ -102,6 +102,12 @@ export class PathFindPanel implements vscode.Disposable {
           });
         } else if (message.type === 'expandCallers' && 'id' in message && typeof message.id === 'string') {
           void this.expandNodeCallers(message.id);
+        // --- expand complex variables feature ---
+        } else if (message.type === 'expandVariable' && 'ref' in message && typeof message.ref === 'number'
+          && 'start' in message && typeof message.start === 'number'
+          && 'count' in message && typeof message.count === 'number') {
+          void this.sendVariableChildren(message.ref, message.start, message.count);
+        // --- end expand complex variables feature ---
         } else if (message.type === 'previewCallers' && 'id' in message && typeof message.id === 'string') {
           if (this.graph && this.callerPreviews.get(message.id)?.state === 'error') {
             void this.previewNodeCallers(message.id, this.graph, this.callerExpansions);
@@ -208,6 +214,21 @@ export class PathFindPanel implements vscode.Disposable {
     this.send({ type: 'hotCounts', counts: this.hotCounts, returns: this.returnValues });
   }
   // --- end hot-path counting ---
+
+  // --- expand complex variables feature ---
+  /**
+   * Set by the debug tracker for a Python session that has a call-values capture, cleared when that
+   * session ends. Only valid while the program is paused; the capture itself enforces that.
+   */
+  public static variableExpander: ((ref: number, start: number, count: number) => Promise<VariableChildren>) | undefined;
+
+  private async sendVariableChildren(ref: number, start: number, count: number): Promise<void> {
+    const expand = PathFindPanel.variableExpander;
+    // No session, no capture, or it resumed: answer anyway, so the webview can stop waiting.
+    const result = expand ? await expand(ref, start, count) : { ref, children: [], stale: true };
+    this.send({ type: 'variableChildren', result });
+  }
+  // --- end expand complex variables feature ---
 
   // --- call values feature ---
   public setCallValues(values: CallValues): void {
