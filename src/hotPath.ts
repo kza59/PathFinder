@@ -3,9 +3,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { MODULE_NAME, normalizePath } from './nodeId';
-import type { GraphData, HotCounts } from './types';
+import { normalizePath } from './nodeId';
+import { mapHotCounts, type HotFunction } from './hotPathMap';
 import { PathFindPanel } from './webview/PathFindPanel';
+
+// The matcher and its payload shape live in hotPathMap.ts (no vscode, so it is unit-testable);
+// re-exported here so existing importers of this module are unaffected.
+export { mapHotCounts, type HotFunction } from './hotPathMap';
 
 /**
  * Hot-path counting (Python 3.12+ only): counts every call of every workspace function during a
@@ -24,13 +28,6 @@ export const DIR_CONFIG_KEY = 'pathfinderHotDir'; // carries the counts folder f
 const POLL_MS = 300;
 
 /** One function as reported by sitecustomize.py. Lines are 1-based. */
-export interface HotFunction {
-  file: string;     // absolute path
-  qualname: string; // Python's co_qualname: "Dog.speak", "outer.<locals>.inner", "<module>"
-  line: number;     // co_firstlineno: the def line, or the first decorator line when decorated
-  endLine: number;  // last line of the function's code
-  count: number;
-}
 
 interface HotFile {
   pid: number;
@@ -38,71 +35,6 @@ interface HotFile {
   error?: string;
 }
 
-function lastSegment(name: string): string {
-  return name.split('.').pop() ?? name;
-}
-
-/**
- * Maps counted Python functions onto graph nodes. Matches by location, not by building an id from
- * the name: Python's qualnames ("outer.<locals>.inner") differ from the graph's labels ("outer.inner"),
- * and graph ids can carry an "@line" suffix.
- *
- * A function matches the node in the same file whose name line is the first one at or after the
- * code's first line (skips decorator lines; picks the outer function over a nested def on its first
- * body line), within the code's lines, with the same last name segment. "<module>" matches the
- * file's module node.
- */
-export function mapHotCounts(functions: HotFunction[], graph: GraphData | undefined): {
-  counts: HotCounts;
-  unmatched: { fn: HotFunction; reason: string }[];
-} {
-  const nodesByFile = new Map<string, GraphData['nodes']>();
-  for (const node of graph?.nodes ?? []) {
-    const file = normalizePath(node.file);
-    nodesByFile.set(file, [...(nodesByFile.get(file) ?? []), node]);
-  }
-
-  const counts: HotCounts = {};
-  const unmatched: { fn: HotFunction; reason: string }[] = [];
-  for (const fn of functions) {
-    const file = normalizePath(fn.file);
-    const nodes = nodesByFile.get(file) ?? [];
-    let match: GraphData['nodes'][number] | undefined;
-    if (fn.qualname === MODULE_NAME) {
-      match = nodes.find(node => node.label === MODULE_NAME);
-    } else {
-      for (const node of nodes) {
-        if (node.label !== MODULE_NAME && fn.line <= node.line && node.line <= fn.endLine
-            && lastSegment(node.label) === lastSegment(fn.qualname)
-            && (!match || node.line < match.line)) {
-          match = node;
-        }
-      }
-    }
-    if (match) {
-      counts[match.id] = (counts[match.id] ?? 0) + fn.count;
-      continue;
-    }
-    // --- diagnostics: why it didn't match ---
-    const describe = (list: GraphData['nodes']) =>
-      list.map(node => `${node.label} @${node.line}-${node.endLine}`).join(', ');
-    let reason: string;
-    if (!graph) {
-      reason = 'no graph';
-    } else if (!nodes.length) {
-      reason = `file not in graph: ${file}`;
-    } else if (fn.qualname === MODULE_NAME) {
-      reason = `no <module> node in this file (file has: ${describe(nodes)})`;
-    } else {
-      const atLines = nodes.filter(node => node.label !== MODULE_NAME && fn.line <= node.line && node.line <= fn.endLine);
-      reason = atLines.length
-        ? `name differs: "${lastSegment(fn.qualname)}" vs ${describe(atLines)}`
-        : `no node at lines ${fn.line}-${fn.endLine} (file has: ${describe(nodes)})`;
-    }
-    unmatched.push({ fn, reason });
-  }
-  return { counts, unmatched };
-}
 
 /** PYTHONPATH from a dotenv file (KEY=VALUE lines), or undefined. No ${VAR} expansion. */
 function envFilePythonPath(envFile: string): string | undefined {
@@ -201,8 +133,8 @@ export function registerHotPathCounting(context: vscode.ExtensionContext): void 
   const publish = (trigger: string) => {
     const panel = PathFindPanel.currentPanel;
     const graph = panel?.currentGraph;
-    const { counts, unmatched } = mapHotCounts(functions, graph);
-    panel?.setHotCounts(counts);
+    const { counts, returns, unmatched } = mapHotCounts(functions, graph);
+    panel?.setHotCounts(counts, returns); // returns: return values feature
 
     const labels = new Map(graph?.nodes.map(node => [node.id, node.label]));
     const lines = [
