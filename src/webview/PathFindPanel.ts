@@ -345,12 +345,19 @@ export class PathFindPanel implements vscode.Disposable {
       <button id="where-to-break" type="button" title="Find diamond-marked chokepoints for breakpoint suggestions"><span class="chokepoint-icon" aria-hidden="true">&#9671;</span> Suggest Breakpoint</button>
       <label class="noise-toggle"><input id="show-noise" type="checkbox"> Show Noise Functions <span id="noise-count" class="control-count" hidden></span></label>
       <button id="clear-highlights" type="button" title="Clear path and search highlights without changing the layout" disabled>Clear Highlights</button>
+      <!-- --- variable inspector panel --- -->
+      <button id="toggle-variables" type="button" aria-pressed="false" title="Show the selected function's arguments, locals and return value">Variables</button>
+      <!-- --- end variable inspector panel --- -->
       <select id="layout-mode" aria-label="Graph layout">
         <option value="trace">Trace</option>
         <option value="explore">Explore</option>
       </select>
     </div>
   </header>
+  <!-- --- variable inspector panel --- #workspace is a flex row; the pane is a SIBLING of <main>,
+       never a child, so #graph keeps exactly filling <main> and every overlay positioned in
+       <main>'s coordinate space (pills, locals band, truncation, outlines, tooltip) stays aligned. -->
+  <div id="workspace">
   <main>
     <div id="graph" role="img" aria-label="Directed function call graph"></div>
     <div id="node-pills" hidden></div>
@@ -389,6 +396,17 @@ export class PathFindPanel implements vscode.Disposable {
     </details>
     <!-- --- end legend feature --- -->
   </main>
+  <!-- --- variable inspector panel --- -->
+  <div id="variable-resizer" role="separator" aria-orientation="vertical" aria-label="Resize the variables pane" hidden></div>
+  <aside id="variable-pane" aria-labelledby="variable-pane-title" hidden>
+    <header class="pane-header">
+      <h2 id="variable-pane-title">Variables</h2>
+      <button id="variable-pane-close" type="button" aria-label="Hide the variables pane" title="Hide">&times;</button>
+    </header>
+    <div id="variable-pane-body" tabindex="0"></div>
+  </aside>
+  <!-- --- end variable inspector panel --- -->
+  </div>
   <div class="sr-only">
     <span id="search-status" role="status" aria-live="polite">Enter a function name</span>
     <span id="runtime" role="status" aria-live="polite">No runtime path</span>

@@ -230,9 +230,130 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+/* --- variable inspector panel --- */
+/* The row that holds the graph and the pane. <main> stays the flexible cell and keeps its own
+   positioning context, so #graph still fills it exactly and the overlays stay aligned; the
+   ResizeObserver on #graph already calls cy.resize() when the pane changes the width. */
+#workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+#variable-pane {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: var(--pf-pane-width, 320px);
+  min-width: 0;
+  border-left: 1px solid var(--vscode-panel-border, #454545);
+  background: var(--vscode-sideBar-background, #252526);
+}
+
+#variable-pane[hidden] { display: none; }
+
+#variable-resizer {
+  flex: none;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+}
+
+#variable-resizer[hidden] { display: none; }
+#variable-resizer:hover, #variable-resizer.dragging { background: var(--vscode-focusBorder, #007fd4); }
+
+#variable-pane .pane-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--vscode-panel-border, #454545);
+  background: var(--vscode-sideBar-background, #252526);
+}
+
+#variable-pane .pane-header h2 {
+  flex: 1;
+  margin: 0;
+  overflow: hidden;
+  font-size: 1em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#variable-pane-close {
+  flex: none;
+  padding: 0 6px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1.1em;
+}
+
+#variable-pane-body {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 10px 12px;
+  overflow: auto;
+}
+
+#variable-pane-body.stale { opacity: 0.65; }
+
+#variable-pane .pane-section { margin: 0 0 12px; }
+
+#variable-pane .pane-section h3 {
+  margin: 8px 0 4px;
+  font-size: 0.95em;
+  text-transform: none;
+}
+
+#variable-pane .pane-note, #variable-pane .pane-message, #variable-pane .pane-stale {
+  margin: 2px 0 6px;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+
+#variable-pane .pane-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  line-height: 1.6;
+}
+
+#variable-pane .pane-row-note { color: var(--vscode-descriptionForeground, #b0b0b0); }
+
+#variable-pane .pane-twisty {
+  flex: none;
+  width: 14px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+  cursor: pointer;
+  font-size: 0.85em;
+  text-align: left;
+}
+
+#variable-pane .pane-twisty-leaf { cursor: default; }
+#variable-pane .pane-name { flex: none; color: var(--vscode-symbolIcon-variableForeground, #9cdcfe); }
+
+#variable-pane .pane-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+#variable-pane .pane-type {
+  flex: none;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+  font-size: 0.85em;
+}
+/* --- end variable inspector panel --- */
+
 main {
   position: relative;
   flex: 1;
+  min-width: 0; /* variable inspector panel: let the pane take width without squeezing it out */
   min-height: 0;
 }
 

@@ -11,7 +11,8 @@ import { recursionDepth, type RecursionDepth } from '../src/recursion';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
 import type { BreakpointCounts, CallArg, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, ReturnValues, VariableChildren, WebviewMessage } from '../src/types';
-import { shortenValue } from '../src/callValues'; // return values feature (no vscode imports there)
+import { MAX_CHILDREN, shortenValue } from '../src/callValues'; // return values + expand features (no vscode imports there)
+import { VariablePane } from './variablePane'; // variable inspector panel
 
 // --- return values feature ---
 const MAX_RETURN = 22; // characters of the value on the node; the hook already capped it at 120
@@ -721,6 +722,92 @@ export function initializeGraphWebview(): void {
   const truncationMarkers = new TruncationMarkers(cy, document.getElementById('truncation-markers')!,
     message => vscode.postMessage(message));
   const nodePills = new NodePills(cy, document.getElementById('node-pills')!);
+
+  // --- variable inspector panel ---
+  const paneHost = document.getElementById('variable-pane') as HTMLElement;
+  const paneBody = document.getElementById('variable-pane-body') as HTMLElement;
+  const paneTitle = document.getElementById('variable-pane-title') as HTMLElement;
+  const paneResizer = document.getElementById('variable-resizer') as HTMLElement;
+  const paneToggle = document.getElementById('toggle-variables') as HTMLButtonElement;
+  const paneClose = document.getElementById('variable-pane-close') as HTMLButtonElement;
+  const variablePane = new VariablePane(paneBody, paneTitle, {
+    requestChildren: ref => requestChildren(ref, MAX_CHILDREN),
+  });
+
+  /** Which node the pane describes, and whether a recorded step is being scrubbed. */
+  let paneSelection: string | undefined;
+  let paneHistoryStep = false;
+
+  const refreshPane = () => {
+    if (paneHost.hidden) {
+      return;
+    }
+    const node = paneSelection === undefined ? undefined : cy.getElementById(paneSelection);
+    variablePane.update({
+      label: node?.isNode() ? (node.data('label') as string) : undefined,
+      value: paneSelection === undefined ? undefined : renderer.callValue(paneSelection),
+      returnValue: paneSelection === undefined ? undefined : renderer.returnValue(paneSelection),
+      children: childrenByRef,
+      historyStep: paneHistoryStep,
+    });
+  };
+
+  const selectForPane = (id: string | undefined, fromHistory = false) => {
+    paneSelection = id;
+    paneHistoryStep = fromHistory;
+    refreshPane();
+  };
+
+  const PANE_MIN = 220;
+  const PANE_MAX = 640;
+  const paneWidthKey = 'pathfinder.variablePane.width';
+  const setPaneWidth = (width: number) => {
+    const clamped = Math.round(Math.max(PANE_MIN, Math.min(PANE_MAX, width)));
+    paneHost.style.setProperty('--pf-pane-width', `${clamped}px`);
+    try {
+      localStorage.setItem(paneWidthKey, String(clamped)); // best effort: fine if storage is blocked
+    } catch {
+      // ignore
+    }
+  };
+  try {
+    const saved = Number(localStorage.getItem(paneWidthKey));
+    if (Number.isFinite(saved) && saved > 0) {
+      setPaneWidth(saved);
+    }
+  } catch {
+    // ignore
+  }
+
+  const showPane = (show: boolean) => {
+    paneHost.hidden = !show;
+    paneResizer.hidden = !show;
+    paneToggle.setAttribute('aria-pressed', String(show));
+    if (show) {
+      refreshPane();
+    }
+    cy.resize(); // the graph just changed width
+  };
+  paneToggle.addEventListener('click', () => showPane(paneHost.hidden));
+  paneClose.addEventListener('click', () => showPane(false));
+
+  paneResizer.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    paneResizer.classList.add('dragging');
+    paneResizer.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = paneHost.getBoundingClientRect().width;
+    const move = (moved: PointerEvent) => setPaneWidth(startWidth - (moved.clientX - startX));
+    const up = () => {
+      paneResizer.classList.remove('dragging');
+      paneResizer.removeEventListener('pointermove', move);
+      paneResizer.removeEventListener('pointerup', up);
+      cy.resize();
+    };
+    paneResizer.addEventListener('pointermove', move);
+    paneResizer.addEventListener('pointerup', up);
+  });
+  // --- end variable inspector panel ---
   const nodeLocals = new NodeLocals(cy, document.getElementById('node-locals')!); // local variables feature
 
   const renderSuggestions = (state: SearchState) => {
@@ -877,6 +964,8 @@ export function initializeGraphWebview(): void {
     const node = event.target.data() as GraphNode;
     selection.textContent = `${node.label} · ${fileName(node.file)}:${node.line}`;
     selection.title = node.file;
+    // variable inspector panel: additive, so click-to-source below is untouched
+    selectForPane(node.id);
     vscode.postMessage({ type: 'nodeClicked', id: node.id, file: node.file, line: node.line });
   });
 
@@ -901,9 +990,19 @@ export function initializeGraphWebview(): void {
   // --- expand complex variables feature ---
   // Children already fetched for this pause, keyed by variablesReference. Cleared whenever a new
   // callValues snapshot arrives, because that is exactly when the old references stopped meaning
-  // anything. Read-only: the rows are plain text under a pointer-events: none tooltip.
+  // anything. ONE cache shared by the tooltip preview and the variable inspector pane, so opening
+  // the pane on a value you have already hovered costs no further round-trips.
   const childrenByRef = new Map<number, VariableChildren>();
   const requestedRefs = new Set<number>();
+
+  /** Asks for a page of children once per reference per pause. */
+  const requestChildren = (ref: number, count: number) => {
+    if (requestedRefs.has(ref)) {
+      return;
+    }
+    requestedRefs.add(ref);
+    vscode.postMessage({ type: 'expandVariable', ref, start: 0, count });
+  };
 
   /** Draws an expandable value's first children under its row, asking for them once if needed. */
   const renderChildren = (host: HTMLElement, arg: CallArg) => {
@@ -912,10 +1011,8 @@ export function initializeGraphWebview(): void {
     }
     const known = childrenByRef.get(arg.ref);
     if (!known) {
-      if (!requestedRefs.has(arg.ref)) {
-        requestedRefs.add(arg.ref);
-        vscode.postMessage({ type: 'expandVariable', ref: arg.ref, start: 0, count: PREVIEW_CHILDREN });
-      }
+      // The pane asks for a full page; whichever asks first fills the shared cache.
+      requestChildren(arg.ref, MAX_CHILDREN);
       return; // the answer re-renders the tooltip if it is still open on this node
     }
     if (known.stale || !known.children.length) {
@@ -1156,6 +1253,10 @@ export function initializeGraphWebview(): void {
         break;
       case 'debugPath':
         renderer.highlightPath(message.path);
+        // --- variable inspector panel --- a new pause: follow the innermost frame, which also
+        // discards whatever node a manual click had pinned.
+        selectForPane(message.path[message.path.length - 1]);
+        // --- end variable inspector panel ---
         break;
       case 'debugClear':
         renderer.clearDebugPath();
@@ -1163,6 +1264,7 @@ export function initializeGraphWebview(): void {
       case 'hotCounts':
         renderer.setHotCounts(message.counts);
         renderer.setReturnValues(message.returns ?? {}); // return values feature
+        refreshPane(); // variable inspector panel: the return value section
         break;
       // --- call values feature ---
       case 'callValues':
@@ -1173,11 +1275,13 @@ export function initializeGraphWebview(): void {
         requestedRefs.clear();
         refreshTooltipVariables();
         // --- end expand complex variables feature ---
+        refreshPane(); // variable inspector panel: new args/locals, and stale marking on resume
         break;
       // --- expand complex variables feature ---
       case 'variableChildren':
         childrenByRef.set(message.result.ref, message.result);
         refreshTooltipVariables(); // no-op unless the tooltip is still open on that node
+        refreshPane(); // variable inspector panel
         break;
       // --- end expand complex variables feature ---
       // --- end call values feature ---
@@ -1203,6 +1307,15 @@ export function initializeGraphWebview(): void {
   const replayButton = document.getElementById('replay-path') as HTMLButtonElement;
   const navigation = new PathNavigation(state => {
     breadcrumbPath = state.path;
+    // --- variable inspector panel ---
+    // Scrubbing a recorded step: session history stores only the path, never variables, so follow
+    // that step's innermost function but say so rather than showing the last pause's values.
+    if (state.mode === 'history') {
+      selectForPane(state.path[state.path.length - 1], true);
+    } else if (paneHistoryStep) {
+      selectForPane(state.debugPath[state.debugPath.length - 1]); // back to the live pause
+    }
+    // --- end variable inspector panel ---
     pathLabel.textContent = state.label;
     pathLabel.title = state.title;
     pathPrevious.disabled = pathNext.disabled = !state.canMove;
