@@ -160,8 +160,12 @@ const cases: [string, () => void | Promise<void>][] = [
       'special variables': '', '(return) f': '7', __name__: "'__main__'", // nor are these
       total: '3', items: '[1, 2, 3]', text: `'${'x'.repeat(40)}'`, flag: 'True', _p: '0',
     }))!;
-    assert.deepStrictEqual(extras.localsRows, ['total=3', 'items=[1, 2, 3]', "text='xxxxxxxxxxxxxx…"]);
+    // The node's rows lead with the scalars, alphabetical within each group; the list container
+    // drops to the back so it cannot crowd a readable value out behind "+N more".
+    assert.deepStrictEqual(extras.localsRows,
+      ['total=3', "text='xxxxxxxxxxxxxx…", 'flag=True', '_p=0', 'items=[1, 2, 3]']);
     assert.strictEqual(extras.localsCount, 5); // total, items, text, flag, _p
+    // The tooltip keeps debugpy's own order, untouched by the node's reordering.
     assert.deepStrictEqual(extras.locals.map(local => local.name), ['total', 'items', 'text', 'flag', '_p']);
     assert.strictEqual(extras.locals[2].value, `'${'x'.repeat(40)}'`); // the tooltip keeps the value
   }],
@@ -171,11 +175,27 @@ const cases: [string, () => void | Promise<void>][] = [
     assert.ok(long.localsRows[0].length === 34 && long.localsRows[0].endsWith('…'), long.localsRows[0]);
     const many = formatCallLocals(sig, locals(Object.fromEntries(
       Array.from({ length: 25 }, (_, i) => [`v${i}`, String(i)]))))!;
-    assert.strictEqual(many.localsRows.length, 3);
+    assert.strictEqual(many.localsRows.length, 5);
     assert.strictEqual(many.locals.length, 20); // bounds the callValues message
     assert.strictEqual(many.localsCount, 25);
     // undefined, not an empty result: a parameters-only CallValue stays exactly what it always was.
     assert.strictEqual(formatCallLocals(sig, locals({ a: '1', 'special variables': '' })), undefined);
+  }],
+  ['node rows lead with scalars, containers and objects fall to the back', () => {
+    const sig = parseSignature(['def f(a):', '    pass'], 1)!;
+    const rows = (entries: Record<string, string>) =>
+      formatCallLocals(sig, locals(entries))!.localsRows.map(row => row.split('=')[0]);
+    // Alphabetical in; scalars come out first, each group still alphabetical among itself.
+    assert.deepStrictEqual(rows({
+      bag: '{1, 2}', count: '7', dog: '<__main__.Dog object at 0x1>', empty: 'None',
+      items: '[1, 2, 3]', name: "'ada'", ok: 'True', pair: '(9,)', ratio: '3.14',
+    }), ['count', 'empty', 'name', 'ok', 'ratio']);
+    // Float specials, bytes and negatives are scalars; a function object is not.
+    assert.deepStrictEqual(rows({
+      a_fn: '<function helper at 0x1>', b_inf: 'inf', c_bytes: "b'hi'", d_neg: '-3', e_nan: 'nan',
+    }), ['b_inf', 'c_bytes', 'd_neg', 'e_nan', 'a_fn']);
+    // Containers still fill the rows that the scalars leave free.
+    assert.deepStrictEqual(rows({ a_list: '[1]', b_num: '2', c_dict: '{}' }), ['b_num', 'a_list', 'c_dict']);
   }],
   ['scope trust: the hint or the exact name, never the fallback', () => {
     assert.strictEqual(isLocalsScope({ name: 'Locals', variablesReference: 2 }), true);

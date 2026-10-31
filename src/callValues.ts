@@ -35,7 +35,7 @@ const DEBOUNCE_MS = 100;   // VS Code fetches the stack in pages; capture once t
 // --- local variables feature ---
 const MAX_LOCAL_VALUE = 16;  // one local's value in a band row (tighter than args: three rows share the width)
 const MAX_LOCAL_ROW = 34;    // one band row, so a long value can't reach the next column
-const MAX_LOCAL_ROWS = 3;    // rows on the node before "+N more"
+const MAX_LOCAL_ROWS = 5;    // rows on the node before "+N more" (ROW_GAP leaves room for five)
 const MAX_LOCALS_LIST = 20;  // locals in the tooltip, which also bounds the callValues message
 // --- end local variables feature ---
 
@@ -209,6 +209,19 @@ export function isPseudoLocal(name: string): boolean {
 }
 
 /**
+ * A scalar as debugpy reprs it: None, a bool, a float special, a number, or a quoted string or
+ * bytes. Everything else - a list, dict, set, tuple, or any object, function or class - reprs with
+ * a leading `[ { ( <` or a constructor name, so what this really separates is "the value is right
+ * here" from "you need to expand this to learn anything".
+ */
+function isScalarValue(value: string): boolean {
+  const text = value.trimStart();
+  return /^(?:None|True|False|inf|nan)$/.test(text.trimEnd())
+    || /^[-+]?(?:\d|\.\d)/.test(text)             // 7, -3, 3.14, .5, 1e-5, 1_000, 2j
+    || /^[rbufRBUF]{0,2}['"]/.test(text);         // 'text', b'bytes', f'...'
+}
+
+/**
  * The frame's locals that are NOT parameters: the complement of the signature within the Locals
  * scope that formatCallValue already reads, so no extra DAP traffic.
  *
@@ -217,6 +230,8 @@ export function isPseudoLocal(name: string): boolean {
  * `atEntry` pause nothing in the body has been bound yet, so there are no locals to show.
  *
  * Order is debugpy's: alphabetical, with single-underscore names last. It is not binding order.
+ * The tooltip keeps exactly that order; only the node's few rows are reordered, to put the values
+ * you can actually read from a row ahead of the containers that would otherwise crowd them out.
  */
 export function formatCallLocals(
   signature: Signature,
@@ -227,7 +242,12 @@ export function formatCallLocals(
   if (!extras.length) {
     return undefined;
   }
-  const localsRows = extras.slice(0, MAX_LOCAL_ROWS).map(([name, value]) => {
+  // Scalars first. Array.sort is stable and `extras` arrives alphabetical, so each group keeps
+  // that order; the tooltip below reads `extras`, not this, and so is left untouched.
+  const ordered = [...extras].sort(
+    ([, left], [, right]) => Number(isScalarValue(right)) - Number(isScalarValue(left)),
+  );
+  const localsRows = ordered.slice(0, MAX_LOCAL_ROWS).map(([name, value]) => {
     const row = `${name}=${shortenValue(value, MAX_LOCAL_VALUE)}`;
     return row.length > MAX_LOCAL_ROW ? `${row.slice(0, MAX_LOCAL_ROW - 1)}…` : row;
   });
