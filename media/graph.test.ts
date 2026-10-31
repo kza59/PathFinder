@@ -2,6 +2,7 @@ import * as assert from 'node:assert/strict';
 import cytoscape, { type Core } from 'cytoscape';
 import { advanceAnimationFrames, pendingAnimationFrames } from './animationFrames.test';
 import { GraphRenderer, graphStyles, historyStepLabel } from './graph'; // historyStepLabel: session history
+import { NodeLocals } from './nodeLocals'; // local variables feature
 import { heatColor, heatPalette, type HeatRange } from './heatmap';
 import type { GraphData, HotCounts } from '../src/types';
 import { largeSearchGraph } from '../src/test/mockdata';
@@ -27,6 +28,60 @@ const noiseFixture: GraphData = {
   nodes: fixture.nodes.map(node => ({ ...node, noise: node.id === 'a' })),
   edges: [...fixture.edges, { from: 'b', to: 'a', lines: [1] }, { from: 'a', to: 'a', lines: [1] }],
 };
+
+// --- local variables feature ---
+// Only the DOM boundary is replaced; the band runs against real Cytoscape nodes and events.
+class LocalsDiv {
+  public className = '';
+  public textContent = '';
+  public readonly dataset: Record<string, string> = {};
+  public readonly style: Record<string, string> = {};
+  public readonly attributes: Record<string, string> = {};
+  public readonly classes = new Set<string>();
+  public children: LocalsDiv[] = [];
+  public readonly classList = {
+    toggle: (name: string, on: boolean) => { if (on) this.classes.add(name); else this.classes.delete(name); },
+  };
+  constructor(private readonly siblings: LocalsDiv[]) {}
+  public appendChild(child: LocalsDiv): LocalsDiv { this.children.push(child); return child; }
+  public replaceChildren(): void { this.children = []; }
+  public setAttribute(name: string, value: string): void { this.attributes[name] = value; }
+  public remove(): void {
+    const index = this.siblings.indexOf(this);
+    if (index >= 0) this.siblings.splice(index, 1);
+  }
+  public rows(): string[] { return this.children.map(child => child.textContent); }
+}
+
+function withLocals(cy: Core, run: (f: {
+  bands: LocalsDiv[]; flush(): void; locals: NodeLocals; hidden(): boolean;
+}) => void): void {
+  const previousRequest = globalThis.requestAnimationFrame;
+  const previousCancel = globalThis.cancelAnimationFrame;
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrame = 0;
+  globalThis.requestAnimationFrame = callback => { frames.set(++nextFrame, callback); return nextFrame; };
+  globalThis.cancelAnimationFrame = frame => { frames.delete(frame); };
+  const bands: LocalsDiv[] = [];
+  const host = {
+    hidden: true,
+    ownerDocument: { createElement: (tag: string) => { assert.equal(tag, 'div'); return new LocalsDiv(bands); } },
+    appendChild: (band: LocalsDiv) => { bands.push(band); },
+  };
+  const locals = new NodeLocals(cy, host as unknown as HTMLElement);
+  const flush = () => {
+    const callbacks = [...frames.values()];
+    frames.clear();
+    callbacks.forEach(callback => callback(0));
+  };
+  try { run({ bands, flush, locals, hidden: () => host.hidden }); }
+  finally {
+    locals.dispose();
+    globalThis.requestAnimationFrame = previousRequest;
+    globalThis.cancelAnimationFrame = previousCancel;
+  }
+}
+// --- end local variables feature ---
 
 const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void>][] = [
   ...truncationMarkerCases,
@@ -987,6 +1042,87 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(historyStepLabel({ ...step, where: undefined, reason: 'pause' }, 0, 1, 12), 'Step 1 of 1 · (no source) (pause) · 12 older dropped');
   }],
   // --- end session history ---
+  // --- local variables feature ---
+  ['locals never touch the node label, and ride on node data instead', (cy, renderer) => {
+    const label = (id: string) => cy.$id(id).style('label') as string;
+    renderer.setCallValues({
+      a: {
+        line: '(x=3)', args: [{ name: 'x', value: '3' }], atEntry: false,
+        localsRows: ['total=7', 'items=[1, 2]', 'flag=True'], localsCount: 6,
+        locals: [{ name: 'total', value: '7' }],
+      },
+      b: { line: '(y=1)', args: [{ name: 'y', value: '1' }], atEntry: true }, // arguments only
+    });
+    // The whole point of the overlay: the args line is still the only thing added to the label.
+    assert.equal(label('a'), 'a\n(x=3)');
+    assert.equal(label('b'), 'b\n(y=1)');
+    assert.equal(cy.$id('a').hasClass('has-locals'), true);
+    assert.equal(cy.$id('b').hasClass('has-locals'), false);
+    assert.deepEqual(cy.$id('a').data('callLocals'),
+      { rows: ['total=7', 'items=[1, 2]', 'flag=True', '+3 more'], stale: false });
+    assert.equal(cy.$id('b').data('callLocals'), undefined);
+    // Survives a re-render, and clears with the values.
+    renderer.renderGraph(fixture);
+    assert.equal(cy.$id('a').hasClass('has-locals'), true);
+    assert.equal(label('a'), 'a\n(x=3)');
+    renderer.setCallValues({});
+    assert.equal(cy.$('.has-locals').length, 0);
+    assert.equal(cy.$id('a').data('callLocals'), undefined);
+    assert.equal(label('a'), 'a');
+  }],
+  ['the locals band draws one row per local, greys when stale, and clears', (cy, renderer) => {
+    cy.zoom(1); // a headless Cytoscape has no viewport, so its zoom starts at ~0
+    withLocals(cy, f => {
+      renderer.setCallValues({
+        a: {
+          line: '(x=3)', args: [], atEntry: false,
+          localsRows: ['total=7', 'items=[1, 2]'], localsCount: 2, locals: [{ name: 'total', value: '7' }],
+        },
+      });
+      f.flush();
+      assert.deepEqual(f.bands.map(band => band.rows()), [['total=7', 'items=[1, 2]']]);
+      assert.equal(f.bands[0].className, 'node-locals');
+      assert.equal(f.bands[0].dataset.nodeId, 'a');
+      assert.equal(f.bands[0].classes.has('stale'), false);
+      assert.equal(f.bands[0].attributes['aria-label'], 'a locals: total=7, items=[1, 2]');
+      assert.equal(f.hidden(), false);
+      // Anchored below the node, not over the top edge where the pills are.
+      assert.ok(Number.parseFloat(f.bands[0].style.top) > cy.$id('a').renderedPosition().y);
+
+      renderer.setCallValues({
+        a: {
+          line: '(x=3)', args: [], atEntry: false, stale: true,
+          localsRows: ['total=7'], localsCount: 4, locals: [{ name: 'total', value: '7' }],
+        },
+      });
+      f.flush();
+      assert.deepEqual(f.bands.map(band => band.rows()), [['total=7', '+3 more']]);
+      assert.equal(f.bands[0].classes.has('stale'), true);
+
+      renderer.setCallValues({});
+      f.flush();
+      assert.deepEqual(f.bands, []);
+      assert.equal(f.hidden(), true);
+    });
+  }],
+  ['the locals band stays off the graph when zoomed too far out to read', (cy, renderer) => {
+    cy.zoom(1);
+    withLocals(cy, f => {
+      renderer.setCallValues({
+        a: { line: '()', args: [], atEntry: false, localsRows: ['total=7'], localsCount: 1, locals: [] },
+      });
+      f.flush();
+      assert.equal(f.bands.length, 1);
+      cy.zoom(NodeLocals.MIN_ZOOM / 2);
+      f.flush();
+      assert.deepEqual(f.bands, []);
+      assert.equal(f.hidden(), true);
+      cy.zoom(1);
+      f.flush();
+      assert.equal(f.bands.length, 1);
+    });
+  }],
+  // --- end local variables feature ---
 ];
 
 async function main(): Promise<void> {

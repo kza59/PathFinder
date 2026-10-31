@@ -331,6 +331,8 @@ export class PathFindPanel implements vscode.Disposable {
   <main>
     <div id="graph" role="img" aria-label="Directed function call graph"></div>
     <div id="node-pills" hidden></div>
+    <!-- --- local variables feature --- -->
+    <div id="node-locals" hidden></div>
     <div id="truncation-markers" hidden></div>
     <div id="recursion-outlines" aria-hidden="true" hidden></div>
     <div id="layout-labels" aria-hidden="true"></div>

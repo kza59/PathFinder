@@ -248,6 +248,33 @@ main {
 .node-pill.target { background: var(--pf-target, #c586c0); }
 .node-pill.current { background: var(--pf-current, #dcdcaa); }
 
+/* --- local variables feature --- */
+/* A panel attached below each node, on its own surface so the rows never read as loose text over
+   the graph. pointer-events stays none so the node underneath keeps receiving hover, click and
+   drag; max-width keeps a long row inside its own column. */
+#node-locals { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
+#node-locals[hidden] { display: none; }
+.node-locals {
+  position: absolute;
+  transform-origin: top left;
+  box-sizing: border-box;
+  /* 170 = the 180px node minus the 10px the panel is inset from its left edge. */
+  max-width: 170px;
+  padding: 3px 6px;
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, #454545));
+  border-radius: 4px;
+  /* The widget background is opaque in every theme, so edges passing underneath are covered. */
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #252526));
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground, #d4d4d4));
+}
+.node-locals.stale { opacity: 0.55; font-style: italic; }
+.node-local { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* --- end local variables feature --- */
+
 #truncation-markers {
   position: absolute;
   inset: 0;
@@ -386,6 +413,31 @@ button.path-arrow:hover:not(:disabled) { background: var(--vscode-toolbar-hoverB
   white-space: pre-wrap;
 }
 /* --- end call values feature --- */
+
+/* --- local variables feature --- */
+#node-tooltip .tooltip-locals {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, #454545));
+}
+
+#node-tooltip .tooltip-locals[hidden] {
+  display: none;
+}
+
+#node-tooltip .tooltip-locals.stale {
+  opacity: 0.65;
+}
+
+#node-tooltip .tooltip-locals-heading {
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+}
+
+#node-tooltip .tooltip-local {
+  font-family: var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+}
+/* --- end local variables feature --- */
 
 /* --- legend feature --- */
 /* --pf-* colors are set from graphStyles() in media/graph.ts, so they always match the graph. */
