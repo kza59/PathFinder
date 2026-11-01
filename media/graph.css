@@ -525,6 +525,84 @@ button:focus-visible {
 #variable-pane .vtimeline-unrecorded { opacity: 0.45; }
 /* --- end variable timeline --- */
 
+/* --- search by value --- */
+/* Shares the watch bar's shape, so the two inputs read as a pair. */
+#variable-pane .vsearch-bar { border-bottom: 1px solid var(--vscode-panel-border, #454545); }
+
+#value-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--vscode-input-border, #3c3c3c);
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground, #cccccc);
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+#value-input:focus { outline: 1px solid var(--vscode-focusBorder, #007fd4); }
+
+#variable-pane .vsearch-contains {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+
+#value-clear {
+  flex: none;
+  padding: 0 6px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1.1em;
+}
+
+#value-clear[hidden] { display: none; }
+
+#variable-pane .vsearch-row {
+  width: 100%;
+  margin: 0;
+  padding: 0 2px;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: inherit;
+  text-align: left;
+}
+
+#variable-pane .vsearch-row:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+
+#variable-pane .vsearch-row:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+#variable-pane .vsearch-step {
+  flex: none;
+  min-width: 3.5em;
+  font-variant-numeric: tabular-nums;
+}
+
+#variable-pane .vsearch-where {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The tier is also on the row in words; this only reinforces it. */
+#variable-pane .vsearch-tier { flex: none; margin-left: auto; font-size: 0.8em; }
+#variable-pane .vsearch-exact .vsearch-tier { color: var(--vscode-charts-green, #89d185); }
+#variable-pane .vsearch-numeric .vsearch-tier { color: var(--vscode-charts-blue, #4fc1ff); }
+#variable-pane .vsearch-contains .vsearch-tier { color: var(--vscode-descriptionForeground, #b0b0b0); }
+/* --- end search by value --- */
+
 main {
   position: relative;
   flex: 1;

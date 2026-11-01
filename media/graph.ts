@@ -823,6 +823,77 @@ export function initializeGraphWebview(): void {
     };
   });
 
+  // --- search by value ---
+  /**
+   * The value-search bar, built ONCE here rather than rendered by the pane.
+   *
+   * render() calls replaceChildren() on the pane body, so a bar drawn as part of a render would be
+   * destroyed and rebuilt on every path change - losing focus and the caret mid-typing. Built once
+   * and inserted beside the body, it survives every re-render, exactly like the watch input.
+   * It is created in script because the pane's markup lives outside this feature's reach.
+   */
+  const searchBar = document.createElement('div');
+  searchBar.className = 'watch-bar vsearch-bar';
+  const searchLabel = searchBar.appendChild(document.createElement('label'));
+  searchLabel.htmlFor = 'value-input';
+  searchLabel.textContent = 'Value';
+  const searchInputValue = searchBar.appendChild(document.createElement('input'));
+  searchInputValue.id = 'value-input';
+  searchInputValue.type = 'text';
+  searchInputValue.placeholder = 'find a value';
+  searchInputValue.autocomplete = 'off';
+  searchInputValue.spellcheck = false;
+  searchInputValue.setAttribute('aria-describedby', 'value-status');
+  const containsLabel = searchBar.appendChild(document.createElement('label'));
+  containsLabel.className = 'vsearch-contains';
+  containsLabel.htmlFor = 'value-contains';
+  const containsBox = containsLabel.appendChild(document.createElement('input'));
+  containsBox.id = 'value-contains';
+  containsBox.type = 'checkbox';
+  containsLabel.appendChild(document.createTextNode('contains'));
+  containsLabel.title = 'Also match values that merely contain the text, such as 7 inside [7, 8]';
+  const searchClear = searchBar.appendChild(document.createElement('button'));
+  searchClear.type = 'button';
+  searchClear.hidden = true;
+  searchClear.textContent = '×';
+  searchClear.id = 'value-clear';
+  searchClear.setAttribute('aria-label', 'Clear the value search');
+  searchClear.title = 'Clear';
+  const valueStatus = document.createElement('span');
+  valueStatus.id = 'value-status';
+  valueStatus.setAttribute('role', 'status');
+  valueStatus.setAttribute('aria-live', 'polite');
+  valueStatus.textContent = 'No value searched';
+  paneHost.insertBefore(searchBar, paneBody);
+  document.querySelector('.sr-only')?.appendChild(valueStatus);
+
+  const refreshSearch = () => {
+    if (paneHost.hidden) {
+      return;
+    }
+    variablePane.setSearch(searchInputValue.value, containsBox.checked);
+    const searching = searchInputValue.value.trim();
+    searchClear.hidden = !searching;
+    valueStatus.textContent = searching
+      ? `Searching for ${searching}${containsBox.checked ? ', including containing values' : ''}`
+      : 'No value searched';
+  };
+  // Debounced: a long run that is past the index cache is re-scanned per keystroke, and this keeps
+  // typing smooth there. Short runs are instant either way.
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  searchInputValue.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(refreshSearch, 120);
+  });
+  containsBox.addEventListener('change', refreshSearch);
+  searchClear.addEventListener('click', () => {
+    clearTimeout(searchTimer);
+    searchInputValue.value = '';
+    refreshSearch();
+    searchInputValue.focus();
+  });
+  // --- end search by value ---
+
   const refreshWatch = () => {
     if (paneHost.hidden) {
       return;
@@ -871,6 +942,7 @@ export function initializeGraphWebview(): void {
     if (show) {
       refreshPane();
       refreshWatch(); // watch variable
+      refreshSearch(); // search by value
     }
     cy.resize(); // the graph just changed width
   };
@@ -1520,6 +1592,7 @@ export function initializeGraphWebview(): void {
     // why this is a history-only feature rather than a live one.
     if (message.type === 'sessionHistory') {
       historySteps = message.state === 'ended' ? message.steps : [];
+      refreshSearch(); // search by value: a finished run is what there is to search
     }
     // --- end variable history ---
     navigation.receive(message);

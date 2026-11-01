@@ -9,6 +9,10 @@ import type { HistoryStep } from '../src/types';
 // --- variable timeline ---
 import { cellGlyph, cellLabel, timelineModel, type TimelineCell, type TimelineModel } from './variableTimeline';
 // --- end variable timeline ---
+// --- search by value ---
+import { searchByValue, type SearchModel, type ValueMatch } from './searchByValue';
+import { indexRun, type RunIndex } from './watchVariable';
+// --- end search by value ---
 
 // --- variable inspector panel ---
 
@@ -213,6 +217,10 @@ export interface VariablePaneDeps {
 
 /** Draws the model into the pane and owns which rows the user has opened. */
 export class VariablePane {
+  // --- search by value ---
+  /** Runs longer than this are searched without a cached index; see `cachedIndex`. */
+  public static readonly MAX_INDEXED_STEPS = 1500;
+  // --- end search by value ---
   private readonly expanded = new Set<string>();
   private input: PaneInput = { expanded: this.expanded, children: new Map() };
   // --- watch variable ---
@@ -234,6 +242,21 @@ export class VariablePane {
   /** The timeline is collapsed until opened; kept in memory, so it survives re-renders only. */
   private timelineOpen = false;
   // --- end variable timeline ---
+  // --- search by value ---
+  private searchQuery = '';
+  private searchContains = false;
+  private cachedSearch?: { steps: readonly HistoryStep[]; query: string; contains: boolean; model: SearchModel };
+  /**
+   * The run indexed once, shared by the timeline and the value search, so between them the steps
+   * are walked a single time instead of once per feature and once per keystroke.
+   *
+   * Only cached for runs up to MAX_INDEXED_STEPS. A full index costs roughly six maps of up to
+   * twenty entries PER STEP, so a worst-case 5000-step run would cost far more memory than the
+   * recording itself; past the limit both features index on demand, which is slower but correct
+   * and bounded. The search input is debounced for that case.
+   */
+  private cachedIndex?: { steps: readonly HistoryStep[]; index: RunIndex };
+  // --- end search by value ---
 
   constructor(
     private readonly host: HTMLElement,
@@ -301,11 +324,51 @@ export class VariablePane {
     if (cached && cached.steps === this.historySteps && cached.pinned === pinned) {
       return cached.model;
     }
-    const model = timelineModel(this.historySteps, { pinned });
+    const model = timelineModel(this.historySteps, { pinned, index: this.runIndex() });
     this.cachedTimeline = { steps: this.historySteps, pinned, model };
     return model;
   }
   // --- end variable timeline ---
+
+  // --- search by value ---
+  /** The shared run index, or undefined for a run too long to hold one (see cachedIndex). */
+  private runIndex(): RunIndex | undefined {
+    if (!this.historySteps.length || this.historySteps.length > VariablePane.MAX_INDEXED_STEPS) {
+      return undefined;
+    }
+    const cached = this.cachedIndex;
+    if (cached && cached.steps === this.historySteps) {
+      return cached.index;
+    }
+    const index = indexRun(this.historySteps);
+    this.cachedIndex = { steps: this.historySteps, index };
+    return index;
+  }
+
+  private searchModelCached(): SearchModel {
+    const cached = this.cachedSearch;
+    if (cached && cached.steps === this.historySteps
+      && cached.query === this.searchQuery && cached.contains === this.searchContains) {
+      return cached.model;
+    }
+    const model = searchByValue(this.searchQuery, this.historySteps, {
+      contains: this.searchContains,
+      index: this.runIndex(),
+      labelOf: this.deps.labelOf,
+    });
+    this.cachedSearch = {
+      steps: this.historySteps, query: this.searchQuery, contains: this.searchContains, model,
+    };
+    return model;
+  }
+
+  /** The value being searched for, and whether loose substring hits are wanted. */
+  public setSearch(query: string, contains: boolean): void {
+    this.searchQuery = query;
+    this.searchContains = contains;
+    this.render();
+  }
+  // --- end search by value ---
 
   private render(): void {
     const model = paneModel(this.input);
@@ -328,6 +391,11 @@ export class VariablePane {
     // vertical space in a pane that already stacks four sections.
     this.renderTimeline(doc);
     // --- end variable timeline ---
+    // --- search by value ---
+    // Only when something is being searched for: a search is an active act, so it needs no
+    // disclosure to click open, and it costs nothing when the box is empty.
+    this.renderSearch(doc);
+    // --- end search by value ---
 
     if (model.stale) {
       const note = this.host.appendChild(doc.createElement('p'));
@@ -552,6 +620,71 @@ export class VariablePane {
     return element;
   }
   // --- end variable timeline ---
+
+  // --- search by value ---
+  /** Where a value was held: one row per collapsed (node, variable, value) run. */
+  private renderSearch(doc: Document): SearchModel {
+    if (!this.searchQuery.trim()) {
+      return this.searchModelCached(); // nothing searched: no section at all
+    }
+    const model = this.searchModelCached();
+    const block = this.host.appendChild(doc.createElement('section'));
+    block.className = 'pane-section vsearch-section';
+    const heading = block.appendChild(doc.createElement('h3'));
+    heading.textContent = `Value: ${model.query}`;
+
+    const note = block.appendChild(doc.createElement('p'));
+    note.className = 'pane-note';
+    note.textContent = model.message ?? model.note ?? '';
+    if (model.message || !model.rows.length) {
+      return model;
+    }
+
+    for (const row of model.rows) {
+      block.appendChild(this.searchRow(row, doc));
+    }
+    if (model.more) {
+      const trailing = block.appendChild(doc.createElement('p'));
+      trailing.className = 'pane-note';
+      trailing.textContent = `+${model.more} more matches not shown`;
+    }
+    return model;
+  }
+
+  /** One match. A button, because clicking it moves the whole UI to that step. */
+  private searchRow(row: ValueMatch, doc: Document): HTMLElement {
+    const element = doc.createElement('button');
+    element.type = 'button';
+    element.className = `pane-row vsearch-row vsearch-${row.tier}`;
+    element.dataset.step = String(row.index);
+    element.dataset.tier = row.tier;
+    const span = row.steps > 1 ? `steps ${row.index + 1}-${row.lastIndex + 1}` : `step ${row.index + 1}`;
+    const label = `Go to ${span} · ${row.label} · ${row.name} = ${row.value} · ${row.origin} · ${row.tier} match`;
+    element.title = label;
+    element.setAttribute('aria-label', label);
+
+    const step = element.appendChild(doc.createElement('span'));
+    step.className = 'pane-type vsearch-step';
+    step.textContent = row.steps > 1 ? `${row.index + 1}-${row.lastIndex + 1}` : `${row.index + 1}`;
+
+    const where = element.appendChild(doc.createElement('span'));
+    where.className = 'pane-name vsearch-where';
+    where.textContent = `${row.label}.${row.name}`;
+
+    const value = element.appendChild(doc.createElement('span'));
+    value.className = 'pane-value';
+    // The stored repr, verbatim: this is what makes a numeric or contains hit explain itself.
+    value.textContent = row.value;
+
+    // The tier is on the row in words as well as in its class, so a loose hit is never silent.
+    const tier = element.appendChild(doc.createElement('span'));
+    tier.className = 'pane-type vsearch-tier';
+    tier.textContent = row.tier;
+
+    element.addEventListener('click', () => this.deps.historyStepPicked?.(row.index));
+    return element;
+  }
+  // --- end search by value ---
 
   private rowElement(row: PaneRow, doc: Document): HTMLElement {
     const element = doc.createElement('div');

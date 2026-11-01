@@ -1,5 +1,5 @@
 import type { HistoryStep } from '../src/types';
-import { bareName, indexFrame, type Resolved } from './watchVariable';
+import { bareName, indexStep, mergedStep, type RunIndex } from './watchVariable';
 
 // --- variable timeline ---
 
@@ -78,30 +78,6 @@ export interface TimelineModel {
   message?: string; // replaces the lanes entirely (nothing recorded)
 }
 
-/** One step, flattened to bare name -> Resolved across the frames of its path. */
-function indexStep(step: HistoryStep): Map<string, Resolved> | undefined {
-  const values = step.values;
-  if (!values) {
-    return undefined;
-  }
-  const merged = new Map<string, Resolved>();
-  // Innermost frame first, so an inner binding shadows an outer one of the same name - the same
-  // choice the history makes when it picks which frame answers for a step.
-  for (let i = step.path.length - 1; i >= 0; i--) {
-    const nodeId = step.path[i];
-    const frame = Object.prototype.hasOwnProperty.call(values, nodeId) ? values[nodeId] : undefined;
-    if (!frame) {
-      continue;
-    }
-    for (const [name, resolved] of indexFrame(frame)) {
-      if (!merged.has(name)) {
-        merged.set(name, resolved);
-      }
-    }
-  }
-  return merged;
-}
-
 /** Per-step state for one name, before any bucketing. */
 interface Track {
   states: CellState[];
@@ -172,7 +148,7 @@ function toCells(track: Track, steps: number, bucket: number, columns: number): 
  */
 export function timelineModel(
   steps: readonly HistoryStep[],
-  options: { pinned?: string } = {},
+  options: { pinned?: string; index?: RunIndex } = {},
 ): TimelineModel {
   const pinned = bareName((options.pinned ?? '').trim());
   if (!steps.length) {
@@ -187,7 +163,9 @@ export function timelineModel(
   const previous = new Map<string, string>(); // last value seen, for change detection
   let unrecorded = 0;
   steps.forEach((step, index) => {
-    const indexed = indexStep(step);
+    // search by value: the run's index is built once and shared when the caller has it.
+    const frames = options.index ? options.index[index] : indexStep(step);
+    const indexed = frames && mergedStep(frames);
     if (!indexed) {
       unrecorded++;
       for (const track of tracks.values()) {

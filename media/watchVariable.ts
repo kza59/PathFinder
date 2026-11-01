@@ -1,4 +1,4 @@
-import type { CallArg } from '../src/types';
+import type { CallArg, HistoryStep } from '../src/types';
 
 // --- watch variable ---
 
@@ -127,6 +127,67 @@ export function indexFrame(values: WatchSource): Map<string, Resolved> {
   return index;
 }
 // --- end variable timeline ---
+
+// --- search by value ---
+/** One node's captured frame, already indexed by bare name. */
+export interface StepFrame {
+  nodeId: string;
+  index: Map<string, Resolved>;
+}
+
+/**
+ * One step's frames, INNERMOST NODE FIRST, and only nodes that captured values.
+ * `undefined` for a step that captured nothing - which is not the same as a step with no matches.
+ */
+export type StepIndex = readonly StepFrame[];
+
+/** A whole recorded run, indexed once. One entry per step, in step order. */
+export type RunIndex = readonly (StepIndex | undefined)[];
+
+/**
+ * Indexes one step: every frame on its path that captured values, innermost first.
+ *
+ * Shared by the timeline (which merges the frames) and the value search (which keeps them apart,
+ * because a match has to say WHICH function held the value). Both therefore agree on what a step
+ * contained, and the run is only walked once.
+ */
+export function indexStep(step: HistoryStep): StepIndex | undefined {
+  const values = step.values;
+  if (!values) {
+    return undefined;
+  }
+  const frames: StepFrame[] = [];
+  // `path` is outer caller first, so walking it backwards gives innermost first.
+  for (let i = step.path.length - 1; i >= 0; i--) {
+    const nodeId = step.path[i];
+    const frame = Object.prototype.hasOwnProperty.call(values, nodeId) ? values[nodeId] : undefined;
+    if (frame) {
+      frames.push({ nodeId, index: indexFrame(frame) });
+    }
+  }
+  return frames;
+}
+
+export function indexRun(steps: readonly HistoryStep[]): RunIndex {
+  return steps.map(indexStep);
+}
+
+/**
+ * A step's frames flattened to one name -> Resolved, an inner binding shadowing an outer one of
+ * the same name - the same choice the history makes when it picks which frame answers for a step.
+ */
+export function mergedStep(frames: StepIndex): Map<string, Resolved> {
+  const merged = new Map<string, Resolved>();
+  for (const frame of frames) {
+    for (const [name, resolved] of frame.index) {
+      if (!merged.has(name)) {
+        merged.set(name, resolved);
+      }
+    }
+  }
+  return merged;
+}
+// --- end search by value ---
 
 /** Every name this path offers, args and locals together, deduplicated and sorted. */
 export function watchNames(frames: readonly WatchFrame[]): string[] {

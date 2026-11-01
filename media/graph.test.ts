@@ -6,7 +6,10 @@ import { NodeLocals } from './nodeLocals'; // local variables feature
 import { heatColor, heatPalette, type HeatRange } from './heatmap';
 import type { CallValue, GraphData, HistoryStep, HotCounts, StepValues, VariableChildren } from '../src/types';
 import { paneModel, VariablePane } from './variablePane'; // variable inspector panel
-import { indexFrame, resolveName, watchMissText, watchModel } from './watchVariable'; // watch variable
+import { indexFrame, indexRun, indexStep, mergedStep, resolveName, watchMissText, watchModel } from './watchVariable'; // watch variable
+// --- search by value ---
+import { asNumber, matchTier, MAX_RESULTS, searchByValue, unquote } from './searchByValue';
+// --- end search by value ---
 import { MAX_HISTORY_ROWS, valueHistoryModel } from './variableHistory'; // variable history
 // --- variable timeline ---
 import { cellGlyph, cellLabel, MAX_COLUMNS, MAX_LANES, timelineModel, type CellState } from './variableTimeline';
@@ -1863,6 +1866,207 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.ok(labelCalls >= after, 'a name change rebuilds the history model');
   }],
   // --- end variable timeline ---
+  // --- search by value ---
+  ['search: exact matching looks through a string repr quotes and prefixes', () => {
+    assert.equal(unquote("'hello'"), 'hello');
+    assert.equal(unquote('"hello"'), 'hello');
+    assert.equal(unquote("b'hi'"), 'hi');
+    assert.equal(unquote("f'hi'"), 'hi');
+    assert.equal(unquote('7'), undefined);        // not a string repr
+    assert.equal(unquote("'mismatched\""), undefined); // quotes must match
+    // So the value can be typed as the text, not as its repr.
+    assert.equal(matchTier("'hello'", 'hello', false), 'exact');
+    assert.equal(matchTier("'hello'", "'hello'", false), 'exact'); // typing the repr works too
+    assert.equal(matchTier('None', 'None', false), 'exact');
+    // Case-sensitive throughout, like the name matching in the sibling features.
+    assert.equal(matchTier("'Hello'", 'hello', false), undefined);
+    assert.equal(matchTier('True', 'true', false), undefined);
+  }],
+  ['search: the numeric tier equates 7 and 7.0 but never a different number', () => {
+    assert.equal(asNumber('7'), 7);
+    assert.equal(asNumber('7.0'), 7);
+    assert.equal(asNumber('1_000'), 1000);  // Python underscores
+    assert.equal(asNumber('-inf'), -Infinity);
+    assert.equal(asNumber('2j'), undefined); // complex is not compared numerically
+    assert.equal(asNumber('nan'), undefined); // NaN equals nothing, so it is left to exact matching
+    assert.equal(asNumber('hello'), undefined);
+    assert.equal(matchTier('7.0', '7', false), 'numeric');
+    assert.equal(matchTier('7', '7.0', false), 'numeric');
+    assert.equal(matchTier('7e0', '7', false), 'numeric');
+    assert.equal(matchTier('17', '7', false), undefined);
+    assert.equal(matchTier('8', '7', false), undefined);
+    // nan still matches itself exactly, which is the only honest way to find it.
+    assert.equal(matchTier('nan', 'nan', false), 'exact');
+  }],
+  ['search: contains is off by default and boundary-aware for numbers', () => {
+    // Off by default: a value search means "where was this value".
+    assert.equal(matchTier('[7, 8]', '7', false), undefined);
+    assert.equal(matchTier('[7, 8]', '7', true), 'contains');
+    assert.equal(matchTier("{'a': 7}", '7', true), 'contains');
+    // The boundary rule is what keeps the loose tier usable: 7 is not 17, 27 or 0.75.
+    assert.equal(matchTier('17', '7', true), undefined);
+    assert.equal(matchTier('0.75', '7', true), undefined);
+    assert.equal(matchTier('[x7]', '7', true), undefined);
+    assert.equal(matchTier('[27, 7]', '7', true), 'contains'); // the second element does match
+    // Text queries are a plain substring: no numeric neighbours to confuse them with.
+    assert.equal(matchTier("'hello world'", 'hello', true), 'contains');
+    assert.equal(matchTier("['a', 'hello']", 'hello', true), 'contains');
+    // A stronger tier always wins over contains.
+    assert.equal(matchTier('7', '7', true), 'exact');
+    assert.equal(matchTier('7.0', '7', true), 'numeric');
+  }],
+  ['search: rows carry the step, node, variable, stored repr, origin and tier', () => {
+    const step = (node: string, args: Record<string, string>, locals: Record<string, string> = {}): HistoryStep => ({
+      path: ['main', node], reason: 'step', time: 0, session: 'Run',
+      values: {
+        [node]: {
+          args: Object.entries(args).map(([name, value]) => ({ name, value })),
+          locals: Object.entries(locals).map(([name, value]) => ({ name, value })),
+        },
+      },
+    });
+    const model = searchByValue('7', [step('add', { n: '7' }, { total: '7.0' })], { labelOf: id => id.toUpperCase() });
+    assert.deepEqual(model.rows.map(r => [r.index, r.label, r.name, r.value, r.origin, r.tier]), [
+      [0, 'ADD', 'n', '7', 'arg', 'exact'],
+      [0, 'ADD', 'total', '7.0', 'local', 'numeric'], // the stored repr, so the match explains itself
+    ]);
+    assert.equal(model.hits, 2);
+    assert.equal(model.variables, 2);
+    assert.equal(model.steps, 1);
+    assert.equal(model.note, '7 found in 2 variables across 1 of 1 recorded step.');
+    // A miss suggests the toggle rather than just saying no.
+    assert.match(searchByValue('zzz', [step('add', { n: '7' })]).note!, /Try "contains"/);
+  }],
+  ['search: consecutive (node, name, value) runs collapse; a gap starts a new row', () => {
+    const at = (value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    const model = searchByValue('7', [at('7'), at('7'), at('8'), at('7')], { labelOf: id => id });
+    // Two rows, not three hits listed separately: the loop collapses, the return does not.
+    assert.deepEqual(model.rows.map(r => [r.index, r.lastIndex, r.steps]), [[0, 1, 2], [3, 3, 1]]);
+    assert.equal(model.hits, 3);     // raw hits are still counted
+    assert.equal(model.steps, 3);
+    // The same value in a DIFFERENT function is never collapsed into one row.
+    const two: HistoryStep = {
+      path: ['a', 'b'], reason: 'step', time: 0, session: 'Run',
+      values: { a: { args: [{ name: 'n', value: '7' }], locals: [] }, b: { args: [{ name: 'n', value: '7' }], locals: [] } },
+    };
+    const split = searchByValue('7', [two], { labelOf: id => id });
+    assert.deepEqual(split.rows.map(r => r.nodeId), ['b', 'a']); // innermost frame first
+  }],
+  ['search: contains results are ordered exact then numeric then contains, else by step', () => {
+    const step = (value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'v', value }], locals: [] } },
+    });
+    // Loose hit first in time, precise hits later.
+    const steps = [step('[7, 8]'), step('7.0'), step('7')];
+    const loose = searchByValue('7', steps, { contains: true, labelOf: id => id });
+    assert.deepEqual(loose.rows.map(r => [r.tier, r.index]), [['exact', 2], ['numeric', 1], ['contains', 0]]);
+    // Without the toggle only the precise ones survive, in step order.
+    const tight = searchByValue('7', steps, { labelOf: id => id });
+    assert.deepEqual(tight.rows.map(r => [r.tier, r.index]), [['numeric', 1], ['exact', 2]]);
+  }],
+  ['search: capped values are flagged, and the cap reports the overflow', () => {
+    const long = `${'x'.repeat(79)}…`; // what shortenValue leaves behind at capture
+    const capped = searchByValue('xxx', [{
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'v', value: long }], locals: [] } },
+    }], { contains: true, labelOf: id => id });
+    assert.equal(capped.truncated, true);
+    assert.match(capped.note!, /capped at capture/);
+
+    const many: HistoryStep[] = Array.from({ length: MAX_RESULTS + 12 }, (_, i) => ({
+      path: [`f${i}`], reason: 'step', time: i, session: 'Run', // a new node each step: no collapsing
+      values: { [`f${i}`]: { args: [{ name: 'n', value: '7' }], locals: [] } },
+    }));
+    const over = searchByValue('7', many, { labelOf: id => id });
+    assert.equal(over.rows.length, MAX_RESULTS);
+    assert.equal(over.more, 12);
+    assert.equal(over.hits, MAX_RESULTS + 12);
+  }],
+  ['search: degrades like the history, and a valueless entry cannot match', () => {
+    assert.match(searchByValue('7', []).message!, /No recorded session yet/);
+    assert.match(searchByValue('  ', [{ path: ['f'], reason: 'step', time: 0, session: 'Run' }]).message!,
+      /Type a value/);
+    // A session that captured nothing says so, rather than implying the value is absent.
+    const blind = searchByValue('7', [{ path: ['f'], reason: 'step', time: 0, session: 'Run' }]);
+    assert.equal(blind.message, undefined);
+    assert.equal(blind.note, 'No variables were recorded for this session.');
+    // A parameter that was not in Locals has no value, so there is nothing to match.
+    const none = searchByValue('7', [{
+      path: ['f'], reason: 'step', time: 0, session: 'Run', values: { f: { args: [{ name: 'gone' }], locals: [] } },
+    }]);
+    assert.equal(none.rows.length, 0);
+    assert.equal(none.hits, 0);
+  }],
+  ['search: a prebuilt run index gives identical results to indexing on demand', () => {
+    const steps: HistoryStep[] = Array.from({ length: 8 }, (_, i) => ({
+      path: ['outer', 'inner'], reason: 'step', time: i, session: 'Run',
+      values: {
+        outer: { args: [{ name: 'n', value: String(i % 3) }], locals: [] },
+        inner: { args: [], locals: [{ name: 'acc', value: String(i % 2) }] },
+      },
+    }));
+    const shared = indexRun(steps);
+    assert.equal(shared.length, steps.length);
+    // The shared index is the whole point of the scan being done once for both features.
+    assert.deepEqual(searchByValue('1', steps, { index: shared, labelOf: id => id }),
+      searchByValue('1', steps, { labelOf: id => id }));
+    assert.deepEqual(timelineModel(steps, { index: shared }), timelineModel(steps));
+    // mergedStep is what the timeline reads: the innermost frame shadows the outer one.
+    const frames = indexStep(steps[0])!;
+    assert.deepEqual(frames.map(f => f.nodeId), ['inner', 'outer']);
+    assert.deepEqual([...mergedStep(frames).keys()].sort(), ['acc', 'n']);
+  }],
+  ['search: the section appears only with a query, and clicking a row picks that step', () => {
+    const host = new PaneEl();
+    const picked: number[] = [];
+    const pane = new VariablePane(host as unknown as HTMLElement, new PaneEl() as unknown as HTMLElement, {
+      requestChildren: () => {},
+      historyStepPicked: index => picked.push(index),
+      labelOf: id => id,
+    });
+    const at = (value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    pane.setHistory([at('7'), at('7'), at('[7, 8]'), at('7.0')]);
+
+    // No query: no section at all, so the pane is what it was before this feature.
+    pane.setSearch('', false);
+    assert.deepEqual(host.headings(), []);
+
+    pane.setSearch('7', false);
+    assert.deepEqual(host.headings(), ['Value: 7']);
+    const section = host.section('Value')!;
+    // The loop collapsed into one row; the list-valued step is not an exact or numeric match.
+    assert.deepEqual(paneRows(section), [['1-2', 'f.n', '7', 'exact'], ['4', 'f.n', '7.0', 'numeric']]);
+    const rows = section.children.filter(child => child.className.includes('vsearch-row'));
+    assert.equal(rows[0].tag, 'button'); // a real control, so it is keyboard reachable
+    assert.equal(rows[0].dataset.step, '0');
+    assert.equal(rows[1].dataset.tier, 'numeric');
+    assert.match(rows[0].attributes['aria-label'], /Go to steps 1-2 · f · n = 7 · arg · exact match/);
+    rows[1].clicks[0]();
+    rows[0].clicks[0]();
+    assert.deepEqual(picked, [3, 0]);
+
+    // The toggle adds the loose hit, and the precise ones stay above it.
+    pane.setSearch('7', true);
+    assert.deepEqual(paneRows(host.section('Value')!).map(r => r[3]), ['exact', 'numeric', 'contains']);
+
+    // A query nothing holds still explains itself rather than rendering an empty section.
+    pane.setSearch('zzz', false);
+    assert.equal(paneRows(host.section('Value')!).length, 0);
+    assert.match(host.section('Value')!.children[1].textContent, /was not held by any recorded variable/);
+
+    // Nothing recorded degrades like the history and the timeline.
+    pane.setHistory([]);
+    assert.match(host.section('Value')!.children[1].textContent, /No recorded session yet/);
+  }],
+  // --- end search by value ---
+
 
 
 
