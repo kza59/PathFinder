@@ -731,6 +731,13 @@ export function initializeGraphWebview(): void {
   const paneResizer = document.getElementById('variable-resizer') as HTMLElement;
   const paneToggle = document.getElementById('toggle-variables') as HTMLButtonElement;
   const paneClose = document.getElementById('variable-pane-close') as HTMLButtonElement;
+  // --- variable history ---
+  // The finished session's steps, kept here because the pane needs the whole run, not just the
+  // step being scrubbed. Set from the sessionHistory message; empty while recording, by design.
+  let historySteps: HistoryStep[] = [];
+  /** Set once the navigation exists, so a timeline click can move the whole UI to that step. */
+  let goToStep: (index: number) => void = () => {};
+  // --- end variable history ---
   // --- watch variable ---
   const watchInput = document.getElementById('watch-input') as HTMLInputElement;
   const watchList = document.getElementById('watch-names') as HTMLDataListElement;
@@ -754,6 +761,13 @@ export function initializeGraphWebview(): void {
       }));
     },
     // --- end watch variable ---
+    // --- variable history ---
+    historyStepPicked: index => goToStep(index),
+    labelOf: nodeId => {
+      const element = cy.getElementById(nodeId);
+      return element.length && element.isNode() ? element.data('label') as string : undefined;
+    },
+    // --- end variable history ---
   });
 
   /** Which node the pane describes, and whether a recorded step is being scrubbed. */
@@ -814,6 +828,8 @@ export function initializeGraphWebview(): void {
       return;
     }
     variablePane.setWatch(watchInput.value, watchFrames());
+    // variable history: the same name drives the time axis, so it re-renders with the space axis.
+    variablePane.setHistory(historySteps);
     const watching = watchInput.value.trim();
     watchClear.hidden = !watching;
     watchStatus.textContent = watching ? `Watching ${watching}` : 'No variable watched';
@@ -1417,6 +1433,7 @@ export function initializeGraphWebview(): void {
   const rebuildPaths = () => {
     navigation.setGraph(pathGraph, renderer.layout?.targetIds ?? new Set(), showNoise.checked);
   };
+  goToStep = index => navigation.goTo(index); // variable history
   pathPrevious.addEventListener('click', () => navigation.move(-1));
   pathNext.addEventListener('click', () => navigation.move(1));
   returnToDebug.addEventListener('click', () => navigation.returnToDebug());
@@ -1494,8 +1511,17 @@ export function initializeGraphWebview(): void {
     if (message.type === 'graph') {
       pathGraph = message.graph;
       rebuildPaths();
+      // variable history: node labels come from the graph, so re-render the timeline onto it.
+      refreshWatch();
       return;
     }
+    // --- variable history ---
+    // Only an ENDED session carries steps; while recording the message has just a count, which is
+    // why this is a history-only feature rather than a live one.
+    if (message.type === 'sessionHistory') {
+      historySteps = message.state === 'ended' ? message.steps : [];
+    }
+    // --- end variable history ---
     navigation.receive(message);
   });
   // --- end breadcrumb feature ---

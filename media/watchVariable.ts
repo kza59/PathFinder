@@ -83,7 +83,7 @@ export interface WatchModel {
  * Nothing else is normalised: the match is exact and case-sensitive, because Python identifiers
  * are, and folding case would conflate `total` with `Total`.
  */
-function bareName(name: string): string {
+export function bareName(name: string): string {
   return name.replace(/^\*{1,2}/, '');
 }
 
@@ -134,6 +134,42 @@ function collapse(frames: readonly WatchFrame[]): CollapsedFrame[] {
   return rows;
 }
 
+// --- variable history ---
+/**
+ * The outcome of looking one name up in one frame's values. `value` is set exactly when `miss`
+ * is not. Only the three "we had values to look in" cases can come out of here; `outside` and
+ * `no-capture` are about the frame itself, so the callers add those.
+ */
+export interface Resolved {
+  value?: string;
+  origin?: 'arg' | 'local';
+  miss?: Extract<WatchMiss, 'not-present' | 'maybe-capped' | 'no-value'>;
+}
+
+/**
+ * THE one place a variable name is matched against captured values. Both the watch (space axis)
+ * and the value history (time axis) go through here, so the star rule and the case-sensitive exact
+ * match cannot drift apart between them.
+ *
+ * `name` is whatever the user typed; it is normalised here, so a caller cannot forget to.
+ */
+export function resolveName(values: WatchSource, name: string): Resolved {
+  const bare = bareName(name);
+  // Arguments first, then locals: the same name can be a parameter here and a local there, and
+  // that difference is worth seeing rather than flattening.
+  const arg = findIn(values.args, bare);
+  const local = arg ? undefined : findIn(values.locals, bare);
+  const hit = arg ?? local;
+  if (!hit) {
+    const locals = values.locals ?? [];
+    const capped = (values.localsCount ?? locals.length) > locals.length;
+    return { miss: capped ? 'maybe-capped' : 'not-present' };
+  }
+  const origin = arg ? ('arg' as const) : ('local' as const);
+  return hit.value === undefined ? { origin, miss: 'no-value' } : { origin, value: hit.value };
+}
+// --- end variable history ---
+
 /** Resolves one frame, keeping the five "no value" cases apart. */
 function watchRow(frame: CollapsedFrame, name: string): WatchRow {
   const base = { id: frame.id, label: frame.label ?? '(outside graph)', repeats: frame.repeats };
@@ -143,20 +179,7 @@ function watchRow(frame: CollapsedFrame, name: string): WatchRow {
   if (!frame.values) {
     return { ...base, miss: 'no-capture' };
   }
-  // Arguments first, then locals: the same name can be a parameter here and a local there, and
-  // that difference is worth seeing rather than flattening.
-  const arg = findIn(frame.values.args, name);
-  const local = arg ? undefined : findIn(frame.values.locals, name);
-  const hit = arg ?? local;
-  if (!hit) {
-    const locals = frame.values.locals ?? [];
-    const capped = (frame.values.localsCount ?? locals.length) > locals.length;
-    return { ...base, miss: capped ? 'maybe-capped' : 'not-present' };
-  }
-  const origin = arg ? ('arg' as const) : ('local' as const);
-  return hit.value === undefined
-    ? { ...base, origin, miss: 'no-value' }
-    : { ...base, origin, value: hit.value };
+  return { ...base, ...resolveName(frame.values, name) }; // variable history: the shared primitive
 }
 
 /** Resolves `name` at every node of `frames` (outer caller first, like debugPath). */
@@ -176,7 +199,7 @@ export function watchModel(name: string, frames: readonly WatchFrame[]): WatchMo
     };
   }
 
-  const rows = collapse(frames).map(frame => watchRow(frame, bareName(wanted)));
+  const rows = collapse(frames).map(frame => watchRow(frame, wanted));
   const found = rows.filter(row => row.value !== undefined).length;
   const nodes = rows.filter(row => row.miss !== 'outside').length;
   return {

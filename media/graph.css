@@ -403,6 +403,52 @@ button:focus-visible {
 #variable-pane .watch-miss .pane-value { color: var(--vscode-descriptionForeground, #b0b0b0); }
 /* --- end watch variable --- */
 
+/* --- variable history --- */
+/* A button, because clicking a row moves the whole UI to that step - but it reads as a row. */
+#variable-pane .vhistory-row {
+  width: 100%;
+  margin: 0;
+  padding: 0 2px;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: inherit;
+  text-align: left;
+}
+
+#variable-pane .vhistory-row:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+
+#variable-pane .vhistory-row:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+/* Fixed width so the values line up in a column and a change is visible at a glance. */
+#variable-pane .vhistory-step {
+  flex: none;
+  min-width: 3.5em;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+  font-variant-numeric: tabular-nums;
+}
+
+#variable-pane .vhistory-label {
+  flex: none;
+  max-width: 35%;
+  overflow: hidden;
+  color: var(--vscode-symbolIcon-functionForeground, #dcdcaa);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#variable-pane .vhistory-gap {
+  margin: 1px 0 1px 3.5em;
+  font-size: 0.85em;
+  font-style: italic;
+}
+/* --- end variable history --- */
+
 main {
   position: relative;
   flex: 1;

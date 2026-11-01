@@ -98,6 +98,23 @@ export class PathNavigation {
     this.publish();
   }
 
+  // --- variable history ---
+  /**
+   * Select a recorded step by index: what clicking a value-history entry does.
+   *
+   * Deliberately the same two fields the arrows set, so the step label, breadcrumb, graph
+   * highlight, the inspector pane and the watch box all follow through the usual publish - a jump
+   * cannot drift out of sync with a step reached by arrowing.
+   */
+  public goTo(index: number): void {
+    if (!this.steps.length) return;
+    this.cancelPlayback();
+    this.index = Math.max(0, Math.min(index, this.steps.length - 1));
+    this.mode = 'history';
+    this.publish();
+  }
+  // --- end variable history ---
+
   public returnToDebug(): void {
     this.cancelPlayback();
     if (this.live.length) { this.mode = 'debug'; this.index = -1; }

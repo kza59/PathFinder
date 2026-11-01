@@ -4,9 +4,10 @@ import { advanceAnimationFrames, pendingAnimationFrames } from './animationFrame
 import { flowLines, GraphRenderer, graphStyles, historyStepLabel } from './graph'; // historyStepLabel: session history; flowLines: argument vs return feature
 import { NodeLocals } from './nodeLocals'; // local variables feature
 import { heatColor, heatPalette, type HeatRange } from './heatmap';
-import type { CallValue, GraphData, HotCounts, StepValues, VariableChildren } from '../src/types';
+import type { CallValue, GraphData, HistoryStep, HotCounts, StepValues, VariableChildren } from '../src/types';
 import { paneModel, VariablePane } from './variablePane'; // variable inspector panel
-import { watchMissText, watchModel } from './watchVariable'; // watch variable
+import { resolveName, watchMissText, watchModel } from './watchVariable'; // watch variable
+import { MAX_HISTORY_ROWS, valueHistoryModel } from './variableHistory'; // variable history
 import { largeSearchGraph } from '../src/test/mockdata';
 import { CASES } from '../src/test/cases';
 import { DEBUG_CASES } from '../src/test/debugCases';
@@ -1462,7 +1463,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     // Nothing selected: the inspector has only a message, but the watch still has something to say.
     pane.setWatch('total', frames);
     assert.equal(pane.watched, 'total');
-    assert.deepEqual(host.headings(), ['Watch: total']);
+    assert.deepEqual(host.headings(), ['Watch: total', 'History: total']); // variable history: siblings
     assert.deepEqual(paneRows(host.section('Watch')), [['main', '0', 'local'], ['add', '3', 'arg']]);
     assert.deepEqual(suggested.at(-1), ['total']); // the input's suggestion list follows the path
 
@@ -1472,7 +1473,8 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
       value: { line: '(items=[1])', atEntry: false, args: [{ name: 'items', value: '[1]', ref: 4 }] },
       children: new Map(),
     });
-    assert.deepEqual(host.headings(), ['Watch: total', 'Arguments', 'Local variables', 'Return value']);
+    assert.deepEqual(host.headings(),
+      ['Watch: total', 'History: total', 'Arguments', 'Local variables', 'Return value']);
 
     // Open the argument's twisty, then re-render the watch: the disclosure must stay open.
     const twisty = host.section('Arguments')!.children.find(child => child.className === 'pane-row')!
@@ -1491,6 +1493,154 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.deepEqual(host.headings(), ['Arguments', 'Local variables', 'Return value']);
   }],
   // --- end watch variable ---
+  // --- variable history ---
+  ['history: one entry per change, collapsing consecutive steps with the same value AND node', () => {
+    const at = (node: string, value: string, time: number): HistoryStep => ({
+      path: ['main', node], reason: 'step', time, session: 'Run',
+      values: { [node]: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    const model = valueHistoryModel('n', [
+      at('fact', '3', 10), at('fact', '3', 20), at('fact', '3', 30), // one run: n did not change
+      at('fact', '2', 40),
+      at('other', '2', 50), // same value, different node: a different fact, so a new entry
+      at('fact', '2', 60),
+    ], id => id);
+    assert.deepEqual(model.rows.map(r => r.kind === 'value' ? [r.label, r.value, r.index, r.lastIndex, r.steps] : r.kind), [
+      ['fact', '3', 0, 2, 3],
+      ['fact', '2', 3, 3, 1],
+      ['other', '2', 4, 4, 1],
+      ['fact', '2', 5, 5, 1],
+    ]);
+    assert.equal(model.hits, 6);   // every step had a value
+    assert.equal(model.changes, 4); // but only four of them were changes
+    assert.equal(model.total, 6);
+    assert.equal(model.note, 'n had a value at 6 of 6 recorded steps · 4 changes.');
+  }],
+  ['history: steps without a value are omitted as rows but reported as gaps', () => {
+    const withValue = (value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    const absent: HistoryStep = { // captured, but the name is not there
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'other', value: '1' }], locals: [] } },
+    };
+    const unrecorded: HistoryStep = { path: ['f'], reason: 'step', time: 0, session: 'Run' }; // no values at all
+    const model = valueHistoryModel('n', [
+      withValue('1'), absent, unrecorded, absent, withValue('1'), unrecorded,
+    ], id => id);
+    // The two sides of a gap mean different things and are counted apart.
+    assert.deepEqual(model.rows.map(r => r.kind === 'value' ? ['value', r.value] : ['gap', r.steps, r.unrecorded]), [
+      ['value', '1'],
+      ['gap', 3, 1],
+      ['value', '1'], // the gap broke the run, so the same value is a new entry, not a collapse
+    ]);
+    assert.equal(model.hits, 2);
+    assert.equal(model.unrecorded, 2); // including the trailing one
+    assert.equal(model.note, 'n had a value at 2 of 6 recorded steps · 2 recorded no variables.');
+  }],
+  ['history: a trailing gap is not a row, and the innermost matching node wins', () => {
+    const deep: HistoryStep = {
+      // Outer caller first: main -> mid -> inner. The name is in two frames; the inner one answers.
+      path: ['main', 'mid', 'inner'], reason: 'step', time: 5, session: 'Run',
+      values: {
+        main: { args: [{ name: 'n', value: 'outer' }], locals: [] },
+        inner: { args: [], locals: [{ name: 'n', value: 'innermost' }] },
+      },
+    };
+    const model = valueHistoryModel('n', [deep, { path: ['main'], reason: 'step', time: 9, session: 'Run' }],
+      id => id.toUpperCase());
+    assert.equal(model.rows.length, 1); // the trailing valueless step adds no gap row
+    const entry = model.rows[0];
+    assert.equal(entry.kind === 'value' && entry.value, 'innermost');
+    assert.equal(entry.kind === 'value' && entry.nodeId, 'inner');
+    assert.equal(entry.kind === 'value' && entry.origin, 'local');
+    assert.equal(entry.kind === 'value' && entry.label, 'INNER'); // named by labelOf, not by step.where
+    assert.equal(entry.kind === 'value' && entry.time, 5);
+  }],
+  ['history: shares the watch name matching, stars and case included', () => {
+    const step = (name: string, value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name, value }], locals: [] } },
+    });
+    // resolveName is the single implementation, so *args behaves exactly as it does in the watch.
+    assert.equal(valueHistoryModel('args', [step('*args', '(1,)')], id => id).hits, 1);
+    assert.equal(valueHistoryModel('*args', [step('*args', '(1,)')], id => id).hits, 1);
+    assert.equal(valueHistoryModel('kwargs', [step('**kwargs', '{}')], id => id).hits, 1);
+    assert.equal(valueHistoryModel('Total', [step('total', '1')], id => id).hits, 0);
+    // The same lookup through the watch agrees, which is the point of sharing resolveName.
+    assert.equal(resolveName({ args: [{ name: '*args', value: '(1,)' }] }, 'args').value, '(1,)');
+    assert.equal(resolveName({ args: [{ name: 'total', value: '1' }] }, 'Total').miss, 'not-present');
+  }],
+  ['history: messages when nothing is typed, nothing recorded, or nothing captured', () => {
+    const step: HistoryStep = {
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value: '1' }], locals: [] } },
+    };
+    assert.match(valueHistoryModel('  ', [step]).message!, /Type a variable name/);
+    // History-only: while recording, the message carries no steps, so this is the empty case.
+    assert.match(valueHistoryModel('n', []).message!, /No recorded session yet/);
+    assert.equal(valueHistoryModel('n', []).rows.length, 0);
+    // A whole session that recorded no variables says so, rather than blaming the name.
+    const blind: HistoryStep = { path: ['f'], reason: 'step', time: 0, session: 'Run' };
+    assert.match(valueHistoryModel('n', [blind, blind]).note!, /No variables were recorded for this session/);
+    // Recorded, but the name is nowhere.
+    assert.equal(valueHistoryModel('zzz', [step], id => id).note, 'zzz had no value at any of 1 recorded step.');
+  }],
+  ['history: entries past the cap are counted, not drawn', () => {
+    const steps: HistoryStep[] = Array.from({ length: MAX_HISTORY_ROWS + 25 }, (_, i) => ({
+      path: ['f'], reason: 'step', time: i, session: 'Run',
+      values: { f: { args: [{ name: 'n', value: String(i) }], locals: [] } }, // a change every step
+    }));
+    const model = valueHistoryModel('n', steps, id => id);
+    assert.equal(model.rows.length, MAX_HISTORY_ROWS);
+    assert.equal(model.changes, MAX_HISTORY_ROWS + 25);
+    assert.equal(model.more, 25);
+    // The kept rows are the earliest, so the run reads from its start.
+    assert.equal(model.rows[0].kind === 'value' && model.rows[0].value, '0');
+  }],
+  ['history: the section renders rows and gaps, and clicking a row picks that step', () => {
+    const host = new PaneEl();
+    const picked: number[] = [];
+    const pane = new VariablePane(host as unknown as HTMLElement, new PaneEl() as unknown as HTMLElement, {
+      requestChildren: () => {},
+      historyStepPicked: index => picked.push(index),
+      labelOf: id => id.toUpperCase(),
+    });
+    const hit = (value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    const blank: HistoryStep = { path: ['f'], reason: 'step', time: 0, session: 'Run' };
+
+    // Nothing recorded yet: the section still appears, with the scrubber's kind of message.
+    pane.setWatch('n', []);
+    pane.setHistory([]);
+    assert.deepEqual(host.headings(), ['Watch: n', 'History: n']);
+    assert.match(host.section('History')!.children[1].textContent, /No recorded session yet/);
+
+    pane.setHistory([hit('1'), hit('1'), blank, hit('2')]);
+    const section = host.section('History')!;
+    // Two collapsed steps, a gap marker, then the change. The step numbers are 1-based.
+    assert.deepEqual(paneRows(section), [['1-2', 'F', '1'], ['4', 'F', '2']]);
+    const gaps = section.children.filter(child => child.className.includes('vhistory-gap'));
+    assert.equal(gaps.length, 1);
+    assert.match(gaps[0].textContent, /1 step.* recorded no variables/);
+
+    // Clicking a row reports the FIRST step of its run, which is where a jump should land.
+    const rows = section.children.filter(child => child.className.includes('vhistory-row'));
+    assert.equal(rows[0].tag, 'button'); // a real control, so it is keyboard reachable
+    assert.equal(rows[0].dataset.step, '0');
+    rows[0].clicks[0]();
+    rows[1].clicks[0]();
+    assert.deepEqual(picked, [0, 3]);
+
+    // Clearing the name takes both sections away together.
+    pane.setWatch('', []);
+    assert.deepEqual(host.headings(), []);
+  }],
+  // --- end variable history ---
+
 
 ];
 

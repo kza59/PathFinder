@@ -30,6 +30,44 @@ function withNavigation(renderer: GraphRenderer, run: (navigation: PathNavigatio
 }
 
 export const pathNavigationCases: [string, (cy: Core, renderer: GraphRenderer) => void][] = [
+  // --- variable history ---
+  ['goTo selects a recorded step, clamps, stops playback, and carries the step for the pane', (cy, renderer) => {
+    withNavigation(renderer, (navigation, tick, pending) => {
+      navigation.receive({ type: 'sessionHistory', state: 'ended', steps, dropped: 0 });
+      // A jump reaches the same state arrowing to that step reaches.
+      navigation.goTo(1);
+      assert.equal(navigation.state.mode, 'history');
+      assert.equal(navigation.state.label, 'Step 2 of 3');
+      assert.deepEqual(navigation.state.path, steps[1].path);
+      // receive() copies each step defensively, so this is structural, not reference, equality.
+      assert.deepEqual(navigation.state.step, steps[1]); // the pane reads its recorded values here
+      navigation.move(1);
+      assert.equal(navigation.state.label, 'Step 3 of 3'); // the arrows continue from the jump
+
+      // Out of range is clamped rather than throwing or blanking the path.
+      navigation.goTo(99);
+      assert.equal(navigation.state.label, 'Step 3 of 3');
+      navigation.goTo(-5);
+      assert.equal(navigation.state.label, 'Step 1 of 3');
+
+      // Jumping mid-playback stops it, like every other deliberate move.
+      navigation.toggleReplay();
+      assert.equal(navigation.state.playing, true);
+      navigation.goTo(2);
+      assert.equal(navigation.state.playing, false);
+      assert.equal(pending(), 0);
+      assert.equal(navigation.state.label, 'Step 3 of 3');
+
+      // With nothing recorded it is a no-op: the live path must not be thrown away.
+      navigation.receive({ type: 'debugPath', path: ['root', 'a'] });
+      navigation.receive({ type: 'sessionHistory', state: 'recording', count: 2, dropped: 0 });
+      navigation.goTo(0);
+      assert.equal(navigation.state.mode, 'debug');
+      assert.equal(navigation.state.step, undefined);
+    });
+  }],
+  // --- end variable history ---
+
   ['Clear Highlights stops playback and retains live paths and recorded history for later navigation', (cy, renderer) => {
     withNavigation(renderer, (navigation, tick, pending) => {
       navigation.receive({ type: 'debugPath', path: ['root', 'a'] });

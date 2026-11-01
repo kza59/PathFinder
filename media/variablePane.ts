@@ -2,6 +2,10 @@ import type { CallArg, CallValue, StepValues, VariableChildren } from '../src/ty
 // --- watch variable ---
 import { watchMissText, watchModel, type WatchFrame, type WatchModel } from './watchVariable';
 // --- end watch variable ---
+// --- variable history ---
+import { valueHistoryModel, type LabelOf, type ValueHistoryModel } from './variableHistory';
+import type { HistoryStep } from '../src/types';
+// --- end variable history ---
 
 // --- variable inspector panel ---
 
@@ -196,6 +200,12 @@ export interface VariablePaneDeps {
   /** The names this path offers, so the input's suggestion list can be refreshed. */
   watchNamesChanged?(names: string[]): void;
   // --- end watch variable ---
+  // --- variable history ---
+  /** A timeline entry was clicked: select that recorded step across the whole UI. */
+  historyStepPicked?(index: number): void;
+  /** Names a graph node for a timeline row; undefined when this graph has no such node. */
+  labelOf?: LabelOf;
+  // --- end variable history ---
 }
 
 /** Draws the model into the pane and owns which rows the user has opened. */
@@ -208,6 +218,10 @@ export class VariablePane {
   private watchName = '';
   private watchFrames: WatchFrame[] = [];
   // --- end watch variable ---
+  // --- variable history ---
+  // The recorded run, shared with the watch's name: one box, two axes.
+  private historySteps: readonly HistoryStep[] = [];
+  // --- end variable history ---
 
   constructor(
     private readonly host: HTMLElement,
@@ -244,6 +258,18 @@ export class VariablePane {
   }
   // --- end watch variable ---
 
+  // --- variable history ---
+  /**
+   * The finished session's recorded steps. Separate from setWatch for the same reason setWatch is
+   * separate from update(): the recording arrives once per session, the path changes constantly,
+   * and the selection changes on its own - none of them should re-render the others' state away.
+   */
+  public setHistory(steps: readonly HistoryStep[]): void {
+    this.historySteps = [...steps];
+    this.render();
+  }
+  // --- end variable history ---
+
   private render(): void {
     const model = paneModel(this.input);
     this.title.textContent = this.input.label ?? 'Variables';
@@ -256,6 +282,10 @@ export class VariablePane {
     // say even when no function is selected and the inspector only has a message.
     this.renderWatch(doc);
     // --- end watch variable ---
+    // --- variable history ---
+    // The time axis, right under the space axis: one name, two sections, same order every render.
+    this.renderValueHistory(doc);
+    // --- end variable history ---
 
     if (model.stale) {
       const note = this.host.appendChild(doc.createElement('p'));
@@ -340,6 +370,74 @@ export class VariablePane {
     return model;
   }
   // --- end watch variable ---
+
+  // --- variable history ---
+  /** The value-history section: one row per recorded change, gaps marked, each row clickable. */
+  private renderValueHistory(doc: Document): ValueHistoryModel {
+    const model = valueHistoryModel(this.watchName, this.historySteps, this.deps.labelOf);
+    if (!this.watchName.trim()) {
+      return model; // nothing watched: the pane looks exactly as it did before this feature
+    }
+    const block = this.host.appendChild(doc.createElement('section'));
+    block.className = 'pane-section vhistory-section';
+    const heading = block.appendChild(doc.createElement('h3'));
+    heading.textContent = `History: ${model.name}`;
+    const note = block.appendChild(doc.createElement('p'));
+    note.className = 'pane-note';
+    note.textContent = model.message ?? model.note ?? '';
+    if (model.message) {
+      return model;
+    }
+
+    for (const row of model.rows) {
+      if (row.kind === 'gap') {
+        const marker = block.appendChild(doc.createElement('p'));
+        marker.className = 'pane-note vhistory-gap';
+        const absent = row.steps - row.unrecorded;
+        // The two halves of a gap mean different things, so they are counted separately.
+        marker.textContent = row.unrecorded && absent
+          ? `… ${absent} steps without it, ${row.unrecorded} with nothing recorded`
+          : row.unrecorded
+            ? `… ${row.unrecorded} steps recorded no variables`
+            : `… ${absent} ${absent === 1 ? 'step' : 'steps'} without a value`;
+        continue;
+      }
+      block.appendChild(this.historyRow(row, doc));
+    }
+    if (model.more) {
+      const trailing = block.appendChild(doc.createElement('p'));
+      trailing.className = 'pane-note';
+      trailing.textContent = `+${model.more} more changes not shown`;
+    }
+    return model;
+  }
+
+  /** One timeline entry. A button, because clicking it moves the whole UI to that step. */
+  private historyRow(row: Extract<ValueHistoryModel['rows'][number], { kind: 'value' }>, doc: Document): HTMLElement {
+    const element = doc.createElement('button');
+    element.type = 'button';
+    element.className = 'pane-row vhistory-row';
+    element.dataset.step = String(row.index);
+    const span = row.steps > 1 ? `steps ${row.index + 1}-${row.lastIndex + 1}` : `step ${row.index + 1}`;
+    element.title = `Go to ${span} · ${row.label} · ${row.origin} · ${row.time} ms`;
+
+    const step = element.appendChild(doc.createElement('span'));
+    step.className = 'pane-type vhistory-step';
+    // 1-based, to match the step labels the scrubber already shows.
+    step.textContent = row.steps > 1 ? `${row.index + 1}-${row.lastIndex + 1}` : `${row.index + 1}`;
+
+    const label = element.appendChild(doc.createElement('span'));
+    label.className = 'pane-name vhistory-label';
+    label.textContent = row.label;
+
+    const value = element.appendChild(doc.createElement('span'));
+    value.className = 'pane-value';
+    value.textContent = row.value;
+
+    element.addEventListener('click', () => this.deps.historyStepPicked?.(row.index));
+    return element;
+  }
+  // --- end variable history ---
 
   private rowElement(row: PaneRow, doc: Document): HTMLElement {
     const element = doc.createElement('div');
