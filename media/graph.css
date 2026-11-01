@@ -449,6 +449,82 @@ button:focus-visible {
 }
 /* --- end variable history --- */
 
+/* --- variable timeline --- */
+#variable-pane .vtimeline-section > summary {
+  cursor: pointer;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+  font-size: 0.95em;
+  list-style: revert;
+}
+
+#variable-pane .vtimeline-section > summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+}
+
+#variable-pane .vtimeline-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-x: auto; /* a narrow pane scrolls the strip rather than squashing the cells */
+}
+
+#variable-pane .vtimeline-lane {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#variable-pane .vtimeline-name {
+  flex: none;
+  width: 6.5em;
+  overflow: hidden;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#variable-pane .vtimeline-pinned .vtimeline-name {
+  color: var(--vscode-symbolIcon-variableForeground, #9cdcfe);
+  font-weight: 600;
+}
+
+#variable-pane .vtimeline-strip { display: flex; flex: none; gap: 1px; }
+
+/* Shape and label carry the state; these colours only reinforce what the glyph already says. */
+#variable-pane .vtimeline-cell {
+  flex: none;
+  width: 7px;
+  height: 13px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--vscode-descriptionForeground, #b0b0b0);
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+}
+
+#variable-pane button.vtimeline-cell { cursor: pointer; }
+
+#variable-pane button.vtimeline-cell:hover {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+}
+
+#variable-pane .vtimeline-cell:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 0;
+}
+
+#variable-pane .vtimeline-changed { color: var(--vscode-charts-blue, #4fc1ff); }
+#variable-pane .vtimeline-same { color: var(--vscode-descriptionForeground, #b0b0b0); }
+/* Measured and not there: an empty slot, marked so it is not mistaken for missing data. */
+#variable-pane .vtimeline-absent { border-bottom: 1px dotted var(--vscode-panel-border, #454545); }
+/* Nothing was recorded, which is not the same as "not there" - hence a glyph, not a blank. */
+#variable-pane .vtimeline-unrecorded { opacity: 0.45; }
+/* --- end variable timeline --- */
+
 main {
   position: relative;
   flex: 1;

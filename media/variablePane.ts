@@ -6,6 +6,9 @@ import { watchMissText, watchModel, type WatchFrame, type WatchModel } from './w
 import { valueHistoryModel, type LabelOf, type ValueHistoryModel } from './variableHistory';
 import type { HistoryStep } from '../src/types';
 // --- end variable history ---
+// --- variable timeline ---
+import { cellGlyph, cellLabel, timelineModel, type TimelineCell, type TimelineModel } from './variableTimeline';
+// --- end variable timeline ---
 
 // --- variable inspector panel ---
 
@@ -222,6 +225,15 @@ export class VariablePane {
   // The recorded run, shared with the watch's name: one box, two axes.
   private historySteps: readonly HistoryStep[] = [];
   // --- end variable history ---
+  // --- variable timeline ---
+  // render() runs on every path change, and both the history and the timeline walk the WHOLE run,
+  // so their models are cached against the steps (and, for the history, the name) they were built
+  // from. Without this, dragging through a 5000-step run's paths rescans it on every frame.
+  private cachedHistory?: { steps: readonly HistoryStep[]; name: string; model: ValueHistoryModel };
+  private cachedTimeline?: { steps: readonly HistoryStep[]; pinned: string; model: TimelineModel };
+  /** The timeline is collapsed until opened; kept in memory, so it survives re-renders only. */
+  private timelineOpen = false;
+  // --- end variable timeline ---
 
   constructor(
     private readonly host: HTMLElement,
@@ -270,6 +282,31 @@ export class VariablePane {
   }
   // --- end variable history ---
 
+  // --- variable timeline ---
+  /** The history model for the current name and run, computed once per (steps, name). */
+  private historyModelCached(): ValueHistoryModel {
+    const cached = this.cachedHistory;
+    if (cached && cached.steps === this.historySteps && cached.name === this.watchName) {
+      return cached.model;
+    }
+    const model = valueHistoryModel(this.watchName, this.historySteps, this.deps.labelOf);
+    this.cachedHistory = { steps: this.historySteps, name: this.watchName, model };
+    return model;
+  }
+
+  /** The timeline model for the current run, computed once per (steps, pinned name). */
+  private timelineModelCached(): TimelineModel {
+    const pinned = this.watchName.trim();
+    const cached = this.cachedTimeline;
+    if (cached && cached.steps === this.historySteps && cached.pinned === pinned) {
+      return cached.model;
+    }
+    const model = timelineModel(this.historySteps, { pinned });
+    this.cachedTimeline = { steps: this.historySteps, pinned, model };
+    return model;
+  }
+  // --- end variable timeline ---
+
   private render(): void {
     const model = paneModel(this.input);
     this.title.textContent = this.input.label ?? 'Variables';
@@ -286,6 +323,11 @@ export class VariablePane {
     // The time axis, right under the space axis: one name, two sections, same order every render.
     this.renderValueHistory(doc);
     // --- end variable history ---
+    // --- variable timeline ---
+    // Always present once a run is recorded, but collapsed, so the multi-variable grid costs no
+    // vertical space in a pane that already stacks four sections.
+    this.renderTimeline(doc);
+    // --- end variable timeline ---
 
     if (model.stale) {
       const note = this.host.appendChild(doc.createElement('p'));
@@ -374,7 +416,7 @@ export class VariablePane {
   // --- variable history ---
   /** The value-history section: one row per recorded change, gaps marked, each row clickable. */
   private renderValueHistory(doc: Document): ValueHistoryModel {
-    const model = valueHistoryModel(this.watchName, this.historySteps, this.deps.labelOf);
+    const model = this.historyModelCached(); // variable timeline: shared memoization
     if (!this.watchName.trim()) {
       return model; // nothing watched: the pane looks exactly as it did before this feature
     }
@@ -438,6 +480,78 @@ export class VariablePane {
     return element;
   }
   // --- end variable history ---
+
+  // --- variable timeline ---
+  /** The multi-variable grid, inside a details/summary so it opens only when wanted. */
+  private renderTimeline(doc: Document): TimelineModel {
+    const model = this.timelineModelCached();
+    const block = this.host.appendChild(doc.createElement('details'));
+    block.className = 'pane-section vtimeline-section';
+    if (this.timelineOpen) {
+      block.setAttribute('open', 'open');
+    }
+    // The summary stays useful closed: it says how much there is to see.
+    const summary = block.appendChild(doc.createElement('summary'));
+    summary.textContent = model.lanes.length
+      ? `Variable timeline (${model.names} across ${model.steps} steps)`
+      : 'Variable timeline';
+    summary.addEventListener('click', () => { this.timelineOpen = !this.timelineOpen; });
+
+    const note = block.appendChild(doc.createElement('p'));
+    note.className = 'pane-note';
+    note.textContent = model.message ?? model.note ?? '';
+    if (model.message || !model.lanes.length) {
+      return model;
+    }
+
+    const grid = block.appendChild(doc.createElement('div'));
+    grid.className = 'vtimeline-grid';
+    for (const lane of model.lanes) {
+      const row = grid.appendChild(doc.createElement('div'));
+      row.className = lane.pinned ? 'vtimeline-lane vtimeline-pinned' : 'vtimeline-lane';
+
+      const label = row.appendChild(doc.createElement('span'));
+      label.className = 'pane-name vtimeline-name';
+      label.textContent = lane.name;
+      // The lane's own summary in words and numbers: the grid is never the only readout.
+      label.title = `${lane.name} · ${lane.changes} ${lane.changes === 1 ? 'change' : 'changes'}`
+        + ` · present at ${lane.present} of ${model.steps} steps · ${lane.origin}`;
+
+      const strip = row.appendChild(doc.createElement('span'));
+      strip.className = 'vtimeline-strip';
+      for (const cell of lane.cells) {
+        strip.appendChild(this.timelineCell(lane.name, cell, doc));
+      }
+    }
+    if (model.more) {
+      const trailing = block.appendChild(doc.createElement('p'));
+      trailing.className = 'pane-note';
+      trailing.textContent = `+${model.more} more variables (ranked by changes)`;
+    }
+    return model;
+  }
+
+  /**
+   * One cell. A button when there is a step worth going to, a span otherwise, so only meaningful
+   * cells are focusable. State rides on the glyph, the class AND the label - never colour alone.
+   */
+  private timelineCell(name: string, cell: TimelineCell, doc: Document): HTMLElement {
+    const clickable = cell.state === 'changed' || cell.state === 'same';
+    const element = doc.createElement(clickable ? 'button' : 'span');
+    element.className = `vtimeline-cell vtimeline-${cell.state}`;
+    element.textContent = cellGlyph(cell.state);
+    const label = cellLabel(name, cell);
+    element.title = label;
+    element.setAttribute('aria-label', label);
+    element.dataset.state = cell.state;
+    element.dataset.step = String(cell.target);
+    if (clickable) {
+      (element as HTMLButtonElement).type = 'button';
+      element.addEventListener('click', () => this.deps.historyStepPicked?.(cell.target));
+    }
+    return element;
+  }
+  // --- end variable timeline ---
 
   private rowElement(row: PaneRow, doc: Document): HTMLElement {
     const element = doc.createElement('div');
