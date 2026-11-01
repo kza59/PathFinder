@@ -37,7 +37,12 @@ const RECORDING_UPDATE_MS = 300;
  * and ruinous five thousand times over (~1.8 GB). What survives per frame is the handful of names
  * and short values a reader actually scans in the inspector panel.
  */
-export const MAX_SNAPSHOT_FRAMES = 3;   // innermost distinct nodes per step (the pane shows one at a time)
+// --- watch variable ---
+// Raised from 3 for the watch feature: it reads one name across every node of the highlighted
+// path at once, so a three-node window barely shows a chain. See the budget note below for what
+// the extra frames cost.
+// --- end watch variable ---
+export const MAX_SNAPSHOT_FRAMES = 6;   // innermost distinct nodes per step
 export const MAX_SNAPSHOT_ARGS = 8;     // parameters per frame; nothing else bounds these at all
 export const MAX_SNAPSHOT_LOCALS = 12;  // non-parameter locals per frame (the live tooltip keeps 20)
 export const MAX_SNAPSHOT_VALUE = 80;   // one value, through shortenValue (the live tooltip keeps 300)
@@ -46,9 +51,10 @@ export const MAX_SNAPSHOT_NAME = 40;    // one name; identifiers are shorter in 
  * Total characters of recorded values across the whole history. Past it the OLDEST steps' values
  * are dropped while their paths stay: a path is cheap and always meaningful, values are the
  * expensive part, and a step without them falls back to the message the pane already had.
- * Worst case per step is ~9 KB of characters (3 frames x 20 variables x ~145), so a pathological
- * session keeps values for ~460 steps; a typical one (~800 characters a step) keeps every step,
- * since MAX_STEPS binds first. Ceiling: 4 MB of characters, about 8 MB in memory.
+ * Worst case per step is ~18 KB of characters (6 frames x 20 variables x ~145), so a pathological
+ * session keeps values for ~230 steps; a typical one (~800 characters a step) keeps every step,
+ * since MAX_STEPS binds first. Ceiling: 4 MB of characters, about 8 MB in memory - the ceiling is
+ * what MAX_SNAPSHOT_FRAMES trades against, so raising it costs steps-with-values, never memory.
  */
 export const MAX_SNAPSHOT_CHARS = 4 * 1024 * 1024;
 // --- end per-step variable capture ---

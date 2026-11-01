@@ -235,8 +235,8 @@ const cases: [string, () => void][] = [
     history.start('root');
     const tap = history.tap('Run');
     const perStep = JSON.stringify(snapshotValues(maximalValues(0))!).length;
-    // The worst case stays the size the caps were chosen for: ~9 KB a step.
-    assert.ok(perStep < 12_000, `worst case per step grew to ${perStep} characters`);
+    // The worst case stays the size the caps were chosen for: ~18 KB a step at 6 frames.
+    assert.ok(perStep < 24_000, `worst case per step grew to ${perStep} characters`);
     const needed = Math.floor(MAX_SNAPSHOT_CHARS / perStep) + 2;
     for (let i = 0; i < needed; i++) {
       tap.paused('step');

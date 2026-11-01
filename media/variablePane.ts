@@ -1,4 +1,7 @@
 import type { CallArg, CallValue, StepValues, VariableChildren } from '../src/types';
+// --- watch variable ---
+import { watchMissText, watchModel, type WatchFrame, type WatchModel } from './watchVariable';
+// --- end watch variable ---
 
 // --- variable inspector panel ---
 
@@ -189,12 +192,22 @@ export function paneModel(input: PaneInput): PaneModel {
 export interface VariablePaneDeps {
   /** Ask the extension for a page of children; the answer arrives as a variableChildren message. */
   requestChildren(ref: number): void;
+  // --- watch variable ---
+  /** The names this path offers, so the input's suggestion list can be refreshed. */
+  watchNamesChanged?(names: string[]): void;
+  // --- end watch variable ---
 }
 
 /** Draws the model into the pane and owns which rows the user has opened. */
 export class VariablePane {
   private readonly expanded = new Set<string>();
   private input: PaneInput = { expanded: this.expanded, children: new Map() };
+  // --- watch variable ---
+  // Kept beside the inspector's state rather than inside it: the watch follows the PATH, the
+  // inspector follows the SELECTED NODE, and they change at different moments.
+  private watchName = '';
+  private watchFrames: WatchFrame[] = [];
+  // --- end watch variable ---
 
   constructor(
     private readonly host: HTMLElement,
@@ -212,12 +225,37 @@ export class VariablePane {
     this.render();
   }
 
+  // --- watch variable ---
+  /**
+   * The watched name and the path to resolve it against.
+   *
+   * Deliberately NOT a field on update(): that clears the expansion set whenever the selected
+   * function changes, and the path changes on its own schedule, so routing watch refreshes through
+   * it would collapse open trees for no reason.
+   */
+  public setWatch(name: string, frames: readonly WatchFrame[]): void {
+    this.watchName = name;
+    this.watchFrames = [...frames];
+    this.render();
+  }
+
+  public get watched(): string {
+    return this.watchName;
+  }
+  // --- end watch variable ---
+
   private render(): void {
     const model = paneModel(this.input);
     this.title.textContent = this.input.label ?? 'Variables';
     this.host.classList.toggle('stale', model.stale);
     this.host.replaceChildren();
     const doc = this.host.ownerDocument;
+
+    // --- watch variable ---
+    // First, and before the early return below: the watch follows the path, so it has something to
+    // say even when no function is selected and the inspector only has a message.
+    this.renderWatch(doc);
+    // --- end watch variable ---
 
     if (model.stale) {
       const note = this.host.appendChild(doc.createElement('p'));
@@ -252,6 +290,56 @@ export class VariablePane {
       }
     }
   }
+
+  // --- watch variable ---
+  /** The watch section: one row per node of the path, or a single message. */
+  private renderWatch(doc: Document): WatchModel {
+    const model = watchModel(this.watchName, this.watchFrames);
+    this.deps.watchNamesChanged?.(model.names);
+    if (!this.watchName.trim()) {
+      return model; // nothing watched: the pane looks exactly as it did before this feature
+    }
+    const block = this.host.appendChild(doc.createElement('section'));
+    block.className = 'pane-section watch-section';
+    const heading = block.appendChild(doc.createElement('h3'));
+    heading.textContent = `Watch: ${model.name}`;
+    if (model.message) {
+      const note = block.appendChild(doc.createElement('p'));
+      note.className = 'pane-note';
+      note.textContent = model.message;
+      return model;
+    }
+    if (model.note) {
+      const note = block.appendChild(doc.createElement('p'));
+      note.className = 'pane-note';
+      note.textContent = model.note;
+    }
+    model.rows.forEach((row, index) => {
+      const element = block.appendChild(doc.createElement('div'));
+      // Reuses the inspector's row classes, so one stylesheet change moves both.
+      element.className = row.value === undefined ? 'pane-row watch-row watch-miss' : 'pane-row watch-row';
+      element.dataset.key = `watch/${index}/${row.id}`;
+
+      const name = element.appendChild(doc.createElement('span'));
+      name.className = 'pane-name watch-label';
+      name.textContent = row.repeats > 1 ? `${row.label} x${row.repeats}` : row.label;
+      name.title = row.repeats > 1
+        ? `${row.repeats} positions on this path; the value is the innermost call's`
+        : row.label;
+
+      const value = element.appendChild(doc.createElement('span'));
+      value.className = 'pane-value';
+      value.textContent = row.value ?? watchMissText(row.miss!);
+
+      if (row.origin) {
+        const origin = element.appendChild(doc.createElement('span'));
+        origin.className = 'pane-type';
+        origin.textContent = row.origin;
+      }
+    });
+    return model;
+  }
+  // --- end watch variable ---
 
   private rowElement(row: PaneRow, doc: Document): HTMLElement {
     const element = doc.createElement('div');

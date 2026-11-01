@@ -13,6 +13,7 @@ import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } f
 import type { BreakpointCounts, CallArg, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HistoryStep, HotCounts, ReturnValues, VariableChildren, WebviewMessage } from '../src/types';
 import { MAX_CHILDREN, shortenValue } from '../src/callValues'; // return values + expand features (no vscode imports there)
 import { VariablePane } from './variablePane'; // variable inspector panel
+import type { WatchFrame } from './watchVariable'; // watch variable
 
 // --- return values feature ---
 const MAX_RETURN = 22; // characters of the value on the node; the hook already capped it at 120
@@ -730,8 +731,29 @@ export function initializeGraphWebview(): void {
   const paneResizer = document.getElementById('variable-resizer') as HTMLElement;
   const paneToggle = document.getElementById('toggle-variables') as HTMLButtonElement;
   const paneClose = document.getElementById('variable-pane-close') as HTMLButtonElement;
+  // --- watch variable ---
+  const watchInput = document.getElementById('watch-input') as HTMLInputElement;
+  const watchList = document.getElementById('watch-names') as HTMLDataListElement;
+  const watchClear = document.getElementById('watch-clear') as HTMLButtonElement;
+  const watchStatus = document.getElementById('watch-status')!;
+  // --- end watch variable ---
   const variablePane = new VariablePane(paneBody, paneTitle, {
     requestChildren: ref => requestChildren(ref, MAX_CHILDREN),
+    // --- watch variable ---
+    // Rewritten only when the set actually changes: the watch re-renders on every path change, and
+    // replacing the options under an open dropdown would close it mid-pick.
+    watchNamesChanged: names => {
+      const current = Array.from(watchList.options, option => option.value);
+      if (current.length === names.length && current.every((name, index) => name === names[index])) {
+        return;
+      }
+      watchList.replaceChildren(...names.map(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        return option;
+      }));
+    },
+    // --- end watch variable ---
   });
 
   /** Which node the pane describes, and whether a recorded step is being scrubbed. */
@@ -765,6 +787,46 @@ export function initializeGraphWebview(): void {
     refreshPane();
   };
 
+  // --- watch variable ---
+  /** The highlighted path the watch resolves against: the live stack, or a scrubbed step's path. */
+  let watchPath: DebugPath = [];
+
+  /**
+   * One frame per path position, outer caller first.
+   *
+   * Values come from the recorded step while scrubbing and from the live capture otherwise. A
+   * CallValue and a StepValues both satisfy WatchSource, so neither is converted or copied. An id
+   * with no node in this graph is left label-less, which watchModel reads as "outside graph".
+   */
+  const watchFrames = (): WatchFrame[] => watchPath.map(id => {
+    const element = cy.getElementById(id);
+    const label = element.length && element.isNode() ? element.data('label') as string : undefined;
+    const values = paneStep ? paneStep.values?.[id] : renderer.callValue(id);
+    return {
+      id,
+      ...(label === undefined ? {} : { label }),
+      ...(values ? { values } : {}),
+    };
+  });
+
+  const refreshWatch = () => {
+    if (paneHost.hidden) {
+      return;
+    }
+    variablePane.setWatch(watchInput.value, watchFrames());
+    const watching = watchInput.value.trim();
+    watchClear.hidden = !watching;
+    watchStatus.textContent = watching ? `Watching ${watching}` : 'No variable watched';
+  };
+
+  watchInput.addEventListener('input', refreshWatch);
+  watchClear.addEventListener('click', () => {
+    watchInput.value = '';
+    refreshWatch();
+    watchInput.focus();
+  });
+  // --- end watch variable ---
+
   const PANE_MIN = 220;
   const PANE_MAX = 640;
   const paneWidthKey = 'pathfinder.variablePane.width';
@@ -792,6 +854,7 @@ export function initializeGraphWebview(): void {
     paneToggle.setAttribute('aria-pressed', String(show));
     if (show) {
       refreshPane();
+      refreshWatch(); // watch variable
     }
     cy.resize(); // the graph just changed width
   };
@@ -1285,6 +1348,7 @@ export function initializeGraphWebview(): void {
         refreshTooltipVariables();
         // --- end expand complex variables feature ---
         refreshPane(); // variable inspector panel: new args/locals, and stale marking on resume
+        refreshWatch(); // watch variable: every value on the path just changed
         break;
       // --- expand complex variables feature ---
       case 'variableChildren':
@@ -1344,6 +1408,11 @@ export function initializeGraphWebview(): void {
     if (state.mode === 'source' || state.frame) renderer.previewPath(state.frame ?? state.path);
     renderBreadcrumb();
     syncCopyPathButton();
+    // --- watch variable ---
+    // Last, so paneStep (set by selectForPane above) already matches the path being watched.
+    watchPath = [...state.debugPath];
+    refreshWatch();
+    // --- end watch variable ---
   });
   const rebuildPaths = () => {
     navigation.setGraph(pathGraph, renderer.layout?.targetIds ?? new Set(), showNoise.checked);

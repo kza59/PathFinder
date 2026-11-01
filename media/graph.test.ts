@@ -4,8 +4,9 @@ import { advanceAnimationFrames, pendingAnimationFrames } from './animationFrame
 import { flowLines, GraphRenderer, graphStyles, historyStepLabel } from './graph'; // historyStepLabel: session history; flowLines: argument vs return feature
 import { NodeLocals } from './nodeLocals'; // local variables feature
 import { heatColor, heatPalette, type HeatRange } from './heatmap';
-import type { CallValue, GraphData, HotCounts, VariableChildren } from '../src/types';
-import { paneModel } from './variablePane'; // variable inspector panel
+import type { CallValue, GraphData, HotCounts, StepValues, VariableChildren } from '../src/types';
+import { paneModel, VariablePane } from './variablePane'; // variable inspector panel
+import { watchMissText, watchModel } from './watchVariable'; // watch variable
 import { largeSearchGraph } from '../src/test/mockdata';
 import { CASES } from '../src/test/cases';
 import { DEBUG_CASES } from '../src/test/debugCases';
@@ -53,6 +54,45 @@ class LocalsDiv {
   }
   public rows(): string[] { return this.children.map(child => child.textContent); }
 }
+
+// --- watch variable ---
+/** A fake element covering just the DOM surface VariablePane touches. */
+class PaneEl {
+  public className = '';
+  public textContent = '';
+  public title = '';
+  public type = '';
+  public children: PaneEl[] = [];
+  public dataset: Record<string, string> = {};
+  public style: Record<string, string> = {};
+  public attributes: Record<string, string> = {};
+  public clicks: (() => void)[] = [];
+  public readonly classes = new Set<string>();
+  public readonly classList = {
+    toggle: (name: string, on: boolean) => { if (on) this.classes.add(name); else this.classes.delete(name); },
+  };
+  public readonly ownerDocument = { createElement: (tag: string) => new PaneEl(tag) };
+  constructor(public readonly tag = 'div') {}
+  public appendChild(child: PaneEl): PaneEl { this.children.push(child); return child; }
+  public replaceChildren(...next: PaneEl[]): void { this.children = next; }
+  public setAttribute(name: string, value: string): void { this.attributes[name] = value; }
+  public addEventListener(_name: string, handler: () => void): void { this.clicks.push(handler); }
+  /** Section headings, in render order. */
+  public headings(): string[] {
+    return this.children.flatMap(section =>
+      section.children.filter(child => child.tag === 'h3').map(child => child.textContent));
+  }
+  public section(heading: string): PaneEl | undefined {
+    return this.children.find(child => child.children.some(c => c.tag === 'h3' && c.textContent.startsWith(heading)));
+  }
+}
+
+function paneRows(section: PaneEl | undefined): string[][] {
+  return (section?.children ?? [])
+    .filter(child => child.className.includes('pane-row'))
+    .map(row => row.children.map(cell => cell.textContent));
+}
+// --- end watch variable ---
 
 function withLocals(cy: Core, run: (f: {
   bands: LocalsDiv[]; flush(): void; locals: NodeLocals; hidden(): boolean;
@@ -1304,6 +1344,154 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
   }],
   // --- end per-step variable capture ---
   // --- end variable inspector panel ---
+  // --- watch variable ---
+  ['watch: one name across the path, arguments before locals, with the origin kept', () => {
+    const model = watchModel('total', [
+      { id: 'main', label: 'main', values: { args: [], locals: [{ name: 'total', value: '0' }] } },
+      { id: 'add', label: 'add', values: { args: [{ name: 'total', value: '3' }], locals: [] } },
+      // Present in both: the parameter wins, and the row says so.
+      { id: 'inner', label: 'inner', values: { args: [{ name: 'total', value: '9' }], locals: [{ name: 'total', value: '99' }] } },
+    ]);
+    assert.deepEqual(model.rows.map(r => [r.label, r.value, r.origin]), [
+      ['main', '0', 'local'],
+      ['add', '3', 'arg'],
+      ['inner', '9', 'arg'],
+    ]);
+    assert.equal(model.found, 3);
+    assert.equal(model.note, 'Found at 3 of 3 functions on this path.');
+    // The suggestion list is every name the path offers, deduplicated and sorted.
+    assert.deepEqual(model.names, ['total']);
+  }],
+  ['watch: stars are stripped on both sides, and the match is case-sensitive', () => {
+    const frames = [{
+      id: 'f', label: 'f',
+      values: { args: [{ name: '*args', value: '(1, 2)' }, { name: '**kwargs', value: '{}' }], locals: [] },
+    }];
+    // formatCallValue stores parameters under their display name, so typing the bare name must hit.
+    assert.equal(watchModel('args', frames).rows[0].value, '(1, 2)');
+    assert.equal(watchModel('kwargs', frames).rows[0].value, '{}');
+    assert.equal(watchModel('*args', frames).rows[0].value, '(1, 2)'); // typing the stars works too
+    assert.deepEqual(watchModel('', frames).names, ['args', 'kwargs']); // suggested without stars
+    // Python identifiers are case-sensitive: Total is not total.
+    const cased = [{ id: 'f', label: 'f', values: { args: [{ name: 'total', value: '1' }], locals: [] } }];
+    assert.equal(watchModel('Total', cased).rows[0].miss, 'not-present');
+  }],
+  ['watch: the five no-value cases stay apart', () => {
+    const model = watchModel('total', [
+      { id: 'pathfinder-unmatched-frame-0' },                       // no label: not in this graph
+      { id: 'cold', label: 'cold' },                                // no values captured at all
+      { id: 'other', label: 'other', values: { args: [{ name: 'n', value: '1' }], locals: [] } },
+      { id: 'capped', label: 'capped', values: { args: [], locals: [{ name: 'x', value: '1' }], localsCount: 30 } },
+      { id: 'gone', label: 'gone', values: { args: [{ name: 'total' }], locals: [] } }, // deleted
+    ]);
+    assert.deepEqual(model.rows.map(r => [r.label, r.miss]), [
+      ['(outside graph)', 'outside'],
+      ['cold', 'no-capture'],       // we know nothing: says nothing about the variable
+      ['other', 'not-present'],     // captured, genuinely absent: the informative answer
+      ['capped', 'maybe-capped'],   // the caps dropped locals, so absence is not ours to claim
+      ['gone', 'no-value'],         // found, but not in Locals
+    ]);
+    assert.equal(model.rows.every(r => r.value === undefined), true);
+    assert.equal(model.found, 0);
+    assert.equal(model.note, 'Not found on this path. Check the name, or pause deeper in the call chain.');
+    // Each one reads differently, because each one means something different.
+    assert.equal(new Set(model.rows.map(r => watchMissText(r.miss!))).size, 5);
+    // The outside row is not counted as a function of the path.
+    assert.equal(watchModel('n', [{ id: 'x' }, { id: 'other', label: 'other', values: { args: [{ name: 'n', value: '1' }], locals: [] } }]).note,
+      'Found at 1 of 1 function on this path.');
+  }],
+  ['watch: a recursive node collapses to one row rather than repeating its innermost value', () => {
+    const fact = { id: 'fact', label: 'fact', values: { args: [{ name: 'n', value: '1' }], locals: [] } };
+    const model = watchModel('n', [
+      { id: 'main', label: 'main', values: { args: [], locals: [] } },
+      fact, fact, fact, // the same node three times: only the innermost frame was captured
+    ]);
+    // Printing 1 three times would read as "n never changed", which is false.
+    assert.deepEqual(model.rows.map(r => [r.label, r.repeats, r.value]), [
+      ['main', 1, undefined],
+      ['fact', 3, '1'],
+    ]);
+    assert.equal(model.found, 1);
+    // Consecutive unmatched frames collapse the way the breadcrumb collapses them.
+    const outside = watchModel('n', [{ id: 'a' }, { id: 'b' }, { id: 'main', label: 'main' }]);
+    assert.deepEqual(outside.rows.map(r => [r.label, r.repeats]), [['(outside graph)', 2], ['main', 1]]);
+  }],
+  ['watch: messages replace the rows when there is nothing to resolve', () => {
+    const frames = [{ id: 'f', label: 'f', values: { args: [{ name: 'n', value: '1' }], locals: [] } }];
+    const empty = watchModel('   ', frames);
+    assert.match(empty.message!, /Type a variable name/);
+    assert.deepEqual(empty.rows, []);
+    assert.deepEqual(empty.names, ['n']); // still suggested, so the list is ready before you type
+    const noPath = watchModel('n', []);
+    assert.match(noPath.message!, /No path highlighted/);
+    assert.deepEqual(noPath.rows, []);
+  }],
+  ['watch: a live CallValue and a recorded StepValues both satisfy WatchSource unchanged', () => {
+    // Neither shape is converted anywhere: this is the reuse the feature is built on.
+    const live: CallValue = {
+      line: '(n=2)', atEntry: false, args: [{ name: 'n', value: '2', ref: 7, type: 'int' }],
+      locals: [{ name: 'acc', value: '6', ref: 8 }], localsRows: ['acc=6'], localsCount: 1,
+    };
+    const recorded: StepValues = {
+      args: [{ name: 'n', value: '5' }], locals: [{ name: 'acc', value: '7' }], localsCount: 1,
+    };
+    const model = watchModel('acc', [
+      { id: 'live', label: 'live', values: live },
+      { id: 'recorded', label: 'recorded', values: recorded },
+    ]);
+    assert.deepEqual(model.rows.map(r => [r.label, r.value, r.origin]), [
+      ['live', '6', 'local'],
+      ['recorded', '7', 'local'],
+    ]);
+    assert.deepEqual(model.names, ['acc', 'n']);
+  }],
+  ['watch: the section renders above the inspector, with no selection, and keeps twisties open', () => {
+    const host = new PaneEl();
+    const title = new PaneEl();
+    const requested: number[] = [];
+    const suggested: string[][] = [];
+    const pane = new VariablePane(host as unknown as HTMLElement, title as unknown as HTMLElement, {
+      requestChildren: ref => requested.push(ref),
+      watchNamesChanged: names => suggested.push(names),
+    });
+    const frames = [
+      { id: 'main', label: 'main', values: { args: [], locals: [{ name: 'total', value: '0' }] } },
+      { id: 'add', label: 'add', values: { args: [{ name: 'total', value: '3' }], locals: [] } },
+    ];
+
+    // Nothing selected: the inspector has only a message, but the watch still has something to say.
+    pane.setWatch('total', frames);
+    assert.equal(pane.watched, 'total');
+    assert.deepEqual(host.headings(), ['Watch: total']);
+    assert.deepEqual(paneRows(host.section('Watch')), [['main', '0', 'local'], ['add', '3', 'arg']]);
+    assert.deepEqual(suggested.at(-1), ['total']); // the input's suggestion list follows the path
+
+    // With a selection, the watch comes FIRST and the inspector's own sections follow intact.
+    pane.update({
+      label: 'add',
+      value: { line: '(items=[1])', atEntry: false, args: [{ name: 'items', value: '[1]', ref: 4 }] },
+      children: new Map(),
+    });
+    assert.deepEqual(host.headings(), ['Watch: total', 'Arguments', 'Local variables', 'Return value']);
+
+    // Open the argument's twisty, then re-render the watch: the disclosure must stay open.
+    const twisty = host.section('Arguments')!.children.find(child => child.className === 'pane-row')!
+      .children.find(child => child.className === 'pane-twisty')!;
+    twisty.clicks[0]();
+    assert.deepEqual(requested, [4]);
+    const opened = () => host.section('Arguments')!.children
+      .some(row => row.children.some(cell => cell.attributes['aria-expanded'] === 'true'));
+    assert.equal(opened(), true);
+    pane.setWatch('total', [...frames, { id: 'deep', label: 'deep' }]);
+    assert.equal(opened(), true, 'a watch refresh must not collapse the inspector');
+    assert.deepEqual(paneRows(host.section('Watch')).at(-1), ['deep', 'not recorded']);
+
+    // An empty name takes the section away entirely: the pane is exactly what it was before.
+    pane.setWatch('', frames);
+    assert.deepEqual(host.headings(), ['Arguments', 'Local variables', 'Return value']);
+  }],
+  // --- end watch variable ---
+
 ];
 
 async function main(): Promise<void> {
