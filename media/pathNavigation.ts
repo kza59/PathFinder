@@ -8,6 +8,8 @@ export interface NavigationState {
   path: DebugPath;
   debugPath: DebugPath;
   frame?: DebugPath;
+  /** per-step variable capture: the recorded step being shown, in history mode only. */
+  step?: HistoryStep;
   label: string;
   title: string;
   playing: boolean;
@@ -46,6 +48,7 @@ export class PathNavigation {
     return {
       mode: this.mode, path: [...path], debugPath: [...(this.mode === 'overview' ? [] : this.mode === 'history' ? path : this.live)],
       frame: this.frame ? [...this.frame] : undefined, label,
+      step: this.mode === 'history' ? this.steps[this.index] : undefined, // per-step variable capture
       title: this.mode === 'history' ? historyStepLabel(this.steps[this.index], this.index, this.steps.length, this.dropped)
         : this.catalog.limited ? 'More source paths may exist beyond the displayed set.' : 'Choose a path with the arrows',
       playing: this.playing,

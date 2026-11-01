@@ -1252,7 +1252,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
   }],
   ['pane: messages replace the sections when there is nothing honest to show', () => {
     assert.match(paneModel({ expanded: new Set(), children: new Map() }).message!, /Click a function/);
-    // History records only the path, so a scrubbed step has no variables - say so, do not guess.
+    // A scrubbed step that recorded no variables (not Python, no graph open, or evicted): say so.
     const scrubbed = paneModel({
       label: 'add', historyStep: true,
       value: { line: '(a=3)', atEntry: false, args: [{ name: 'a', value: '3' }] },
@@ -1268,6 +1268,41 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(returnOnly.message, undefined);
     assert.deepEqual(returnOnly.sections.map(s => s.id), ['return']);
   }],
+  // --- per-step variable capture ---
+  ['pane: a scrubbed step renders its recorded strings read-only, with no return section', () => {
+    const model = paneModel({
+      label: 'add', historyStep: true,
+      // The live pause's values belong to another moment: they must not leak into a past step.
+      value: { line: '(a=99)', atEntry: true, args: [{ name: 'a', value: '99', ref: 5 }] },
+      returnValue: '7',
+      historyValues: {
+        args: [{ name: 'a', value: '3' }, { name: 'b' }],
+        locals: [{ name: 'total', value: '[1, 2]' }],
+        localsCount: 4,
+      },
+      expanded: new Set(['locals/total']), // already open from a live pause: cannot reopen here
+      children: new Map(),
+    });
+    assert.equal(model.message, undefined);
+    assert.equal(model.stale, false); // an accurate reading of the past, not a stale one of the present
+    assert.deepEqual(model.sections.map(s => s.id), ['args', 'locals']); // no 'return'
+    assert.deepEqual(model.sections[0].rows.map(r => [r.name, r.value, r.ref, r.expanded]), [
+      ['a', '3', undefined, false],
+      ['b', '(not in locals)', undefined, false],
+    ]);
+    assert.match(model.sections[0].note!, /Recorded at this step: values as they were/);
+    assert.deepEqual(model.sections[1].rows.map(r => [r.name, r.value, r.ref]), [['total', '[1, 2]', undefined]]);
+    assert.equal(model.sections[1].note, '3 more not recorded.');
+    // atEntry changes only the caveat.
+    const entry = paneModel({
+      label: 'add', historyStep: true, historyValues: { args: [], locals: [], atEntry: true },
+      expanded: new Set(), children: new Map(),
+    });
+    assert.match(entry.sections[0].note!, /paused on the first line/);
+    assert.equal(entry.sections[0].rows.length, 0);
+    assert.equal(entry.sections[0].empty, 'No parameters.');
+  }],
+  // --- end per-step variable capture ---
   // --- end variable inspector panel ---
 ];
 

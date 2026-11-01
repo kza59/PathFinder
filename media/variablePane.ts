@@ -1,4 +1,4 @@
-import type { CallArg, CallValue, VariableChildren } from '../src/types';
+import type { CallArg, CallValue, StepValues, VariableChildren } from '../src/types';
 
 // --- variable inspector panel ---
 
@@ -44,8 +44,12 @@ export interface PaneInput {
   returnValue?: string;                              // from the hot-path hook
   expanded: ReadonlySet<string>;                     // row keys the user has opened
   children: ReadonlyMap<number, VariableChildren>;   // what the round-trip has answered so far
-  /** Scrubbing a recorded step: history never captured variables, so values would be a lie. */
+  /** Scrubbing a recorded step: the live values belong to another moment, so they are not shown. */
   historyStep?: boolean;
+  // --- per-step variable capture ---
+  /** What that step recorded for the selected node, if anything. Only read while `historyStep`. */
+  historyValues?: StepValues;
+  // --- end per-step variable capture ---
 }
 
 /** Children of an expanded row, flattened depth-first. Rows are only expandable while live. */
@@ -92,13 +96,53 @@ function variableRows(key: string, arg: CallArg, depth: number, input: PaneInput
   return [row, ...children];
 }
 
+// --- per-step variable capture ---
+/**
+ * A recorded step: the strings session history captured at that pause.
+ *
+ * Read-only by construction - every `ref` was stripped at capture, so variableRows draws leaves and
+ * offers no disclosure that could not be answered. `stale` is false: these values are not a stale
+ * reading of the present, they are an accurate reading of the past, and the resume banner would
+ * misdescribe them. There is no Return value section either: return values are a latest-per-node
+ * record from the hot-path hook, not per-step, so showing one beside a past pause would be a lie.
+ */
+function historyModel(input: PaneInput): PaneModel {
+  const values = input.historyValues;
+  if (!values) {
+    return { sections: [], stale: false, message: 'No variables recorded for this step.' };
+  }
+  const hidden = (values.localsCount ?? values.locals.length) - values.locals.length;
+  return {
+    stale: false,
+    sections: [
+      {
+        id: 'args',
+        title: 'Arguments',
+        note: values.atEntry
+          ? 'Recorded at this step, paused on the first line: values as passed.'
+          : 'Recorded at this step: values as they were at that pause.',
+        rows: values.args.flatMap(arg => variableRows(`args/${arg.name}`, arg, 0, input, false)),
+        empty: 'No parameters.',
+      },
+      {
+        id: 'locals',
+        title: 'Local variables',
+        ...(hidden > 0 ? { note: `${hidden} more not recorded.` } : {}),
+        rows: values.locals.flatMap(local => variableRows(`locals/${local.name}`, local, 0, input, false)),
+        empty: 'None bound yet at this pause.',
+      },
+    ],
+  };
+}
+// --- end per-step variable capture ---
+
 /** The whole pane: three sections for the selected node, or a single message when there is nothing. */
 export function paneModel(input: PaneInput): PaneModel {
   if (!input.label) {
     return { sections: [], stale: false, message: 'Click a function to inspect its variables.' };
   }
   if (input.historyStep) {
-    return { sections: [], stale: false, message: 'No variables recorded for this step.' };
+    return historyModel(input);
   }
   const value = input.value;
   const stale = value?.stale === true;

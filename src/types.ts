@@ -76,6 +76,25 @@ export type BreakpointCounts = Record<string, number>;
 // --- end breakpoint markers ---
 
 // --- session history ---
+// --- per-step variable capture ---
+/**
+ * One frame's variables as session history recorded them at one pause.
+ *
+ * STRINGS ONLY: `ref` and `type` are stripped at capture. A DAP variablesReference dies with the
+ * pause it came from, so a recorded step could never answer an expansion - offering one would be a
+ * disclosure that resolves to nothing. The pane renders these read-only for exactly that reason.
+ *
+ * Capped much tighter than the live CallValue (see the MAX_SNAPSHOT_* caps in sessionHistory.ts):
+ * one live snapshot is cheap, thousands of them are not.
+ */
+export interface StepValues {
+  args: CallArg[];        // the frame's parameters: name + value, no ref/type
+  locals: CallArg[];      // its non-parameter locals, same shape
+  localsRows?: string[];  // the node's value band, already shortened by the local variables feature
+  localsCount?: number;   // locals before the cap, so "+N more" stays truthful
+  atEntry?: boolean;      // paused on the first body line: the values are as passed. Absent = false
+}
+// --- end per-step variable capture ---
 /** One debugger pause of the recorded session. */
 export interface HistoryStep {
   path: DebugPath;   // outer caller first, like debugPath (resolved against the graph at send time)
@@ -83,6 +102,12 @@ export interface HistoryStep {
   time: number;      // ms since the session started
   session: string;   // debug session name (child sessions are recorded into their parent's history)
   where?: { name: string; file: string; line: number }; // the top frame
+  // --- per-step variable capture ---
+  // The innermost few frames' variables at this pause, keyed by graph node id. ABSENT whenever
+  // nothing was recorded: a non-Python session, no graph open while debugging, the program resumed
+  // inside the capture debounce, or the character budget evicted this step's values.
+  values?: Record<string, StepValues>;
+  // --- end per-step variable capture ---
 }
 /** While recording only the count is sent; once the top-level session ends, every step. */
 export type SessionHistoryMessage =

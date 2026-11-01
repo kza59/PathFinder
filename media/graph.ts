@@ -10,7 +10,7 @@ import { recursionAnnouncement, recursionColor, recursionOutlines } from './recu
 import { recursionDepth, type RecursionDepth } from '../src/recursion';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
-import type { BreakpointCounts, CallArg, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, ReturnValues, VariableChildren, WebviewMessage } from '../src/types';
+import type { BreakpointCounts, CallArg, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HistoryStep, HotCounts, ReturnValues, VariableChildren, WebviewMessage } from '../src/types';
 import { MAX_CHILDREN, shortenValue } from '../src/callValues'; // return values + expand features (no vscode imports there)
 import { VariablePane } from './variablePane'; // variable inspector panel
 
@@ -737,6 +737,7 @@ export function initializeGraphWebview(): void {
   /** Which node the pane describes, and whether a recorded step is being scrubbed. */
   let paneSelection: string | undefined;
   let paneHistoryStep = false;
+  let paneStep: HistoryStep | undefined; // per-step variable capture: the step being scrubbed
 
   const refreshPane = () => {
     if (paneHost.hidden) {
@@ -749,12 +750,18 @@ export function initializeGraphWebview(): void {
       returnValue: paneSelection === undefined ? undefined : renderer.returnValue(paneSelection),
       children: childrenByRef,
       historyStep: paneHistoryStep,
+      // --- per-step variable capture ---
+      // Only read while historyStep is set; undefined there means that step recorded nothing for
+      // this node (not Python, no graph open while recording, or the budget evicted it).
+      historyValues: paneSelection === undefined ? undefined : paneStep?.values?.[paneSelection],
+      // --- end per-step variable capture ---
     });
   };
 
-  const selectForPane = (id: string | undefined, fromHistory = false) => {
+  const selectForPane = (id: string | undefined, fromHistory = false, step?: HistoryStep) => {
     paneSelection = id;
     paneHistoryStep = fromHistory;
+    paneStep = fromHistory ? step : undefined; // per-step variable capture
     refreshPane();
   };
 
@@ -965,7 +972,9 @@ export function initializeGraphWebview(): void {
     selection.textContent = `${node.label} · ${fileName(node.file)}:${node.line}`;
     selection.title = node.file;
     // variable inspector panel: additive, so click-to-source below is untouched
-    selectForPane(node.id);
+    // per-step variable capture: while scrubbing, stay on that step - clicking a caller on the
+    // highlighted path is the only way to reach the outer frames the step recorded.
+    selectForPane(node.id, paneHistoryStep, paneStep);
     vscode.postMessage({ type: 'nodeClicked', id: node.id, file: node.file, line: node.line });
   });
 
@@ -1308,10 +1317,10 @@ export function initializeGraphWebview(): void {
   const navigation = new PathNavigation(state => {
     breadcrumbPath = state.path;
     // --- variable inspector panel ---
-    // Scrubbing a recorded step: session history stores only the path, never variables, so follow
-    // that step's innermost function but say so rather than showing the last pause's values.
+    // Scrubbing a recorded step: follow that step's innermost function and show what the step
+    // recorded there, never the live pause's values - they belong to a different moment.
     if (state.mode === 'history') {
-      selectForPane(state.path[state.path.length - 1], true);
+      selectForPane(state.path[state.path.length - 1], true, state.step); // per-step variable capture
     } else if (paneHistoryStep) {
       selectForPane(state.debugPath[state.debugPath.length - 1]); // back to the live pause
     }
