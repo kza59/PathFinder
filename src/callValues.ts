@@ -337,6 +337,16 @@ export interface CallValuesDeps {
   resolveNode(file: string, line: number): NodeLike | undefined;
   readLines(file: string): string[] | undefined;
   publish(values: CallValues): void;
+  // --- per-step variable capture ---
+  /**
+   * The same values `publish` just got, for session history to snapshot onto the pause it has open.
+   * Called from inside the generation guard below, so it inherits the debounce and can never fire
+   * for a pause the program has already left, and it adds NO DAP traffic of its own.
+   * Entries are in stack order, INNERMOST node first (see `capture`), which is the order the
+   * snapshot's frame cap keeps.
+   */
+  onCapture?(values: CallValues): void;
+  // --- end per-step variable capture ---
   debounceMs?: number;
 }
 
@@ -508,8 +518,11 @@ export class CallValuesCapture {
     if (generation !== this.generation) {
       return; // resumed (or paused again) meanwhile
     }
+    // `entries` follows `byNode`, which followed `frames`: innermost node first. Object keys are
+    // node ids (never integer-like), so Object.entries below preserves exactly that order.
     this.values = Object.fromEntries(entries.filter(entry => entry !== undefined));
     this.deps.publish(this.values);
+    this.deps.onCapture?.(this.values); // per-step variable capture: same data, no second round-trip
   }
 
   private lines(file: string): string[] | undefined {

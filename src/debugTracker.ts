@@ -2,7 +2,7 @@ import * as fs from 'fs'; // call values feature
 import * as vscode from 'vscode';
 import { CALL_VALUES_DEBUG_TYPES, CallValuesCapture, RESUME_COMMANDS } from './callValues'; // call values feature
 import { findNodeForFrame } from './graphBuilder';
-import type { DebugPath, GraphData } from './types';
+import type { CallValues, DebugPath, GraphData } from './types';
 import { PathFindPanel } from './webview/PathFindPanel';
 import type { SessionHistoryTap } from './sessionHistory'; // session history (type only: no runtime import)
 
@@ -46,13 +46,19 @@ export function registerDebugTracker(context: vscode.ExtensionContext): void {
       createDebugAdapterTracker: session => {
         trackedSessions.add(session.id);
         const getGraph = () => PathFindPanel.currentPanel?.currentGraph;
+        // --- per-step variable capture ---
+        // The history tap is created BEFORE the capture so the capture can hand each pause's values
+        // to the step the tap has open. Order only: both still receive the same tracker events.
+        const history = sessionHistoryHook.tap?.(session); // session history
+        const callValues = createCallValuesCapture(session, values => history?.valuesCaptured(values));
+        // --- end per-step variable capture ---
         return createTracker(getGraph, frames => {
           // Responses can arrive while a session is shutting down.
           if (!trackedSessions.has(session.id)) return;
           highlightedSessionId = session.id;
           sendHighlight(resolveDebugPath(frames, getGraph()));
-        }, createCallValuesCapture(session), // call values feature
-        sessionHistoryHook.tap?.(session)); // session history
+        }, callValues, // call values feature
+        history); // session history
       },
     }),
     vscode.debug.onDidTerminateDebugSession(session => {
@@ -73,7 +79,10 @@ export function registerDebugTracker(context: vscode.ExtensionContext): void {
 
 // --- call values feature ---
 /** Python sessions only; every other debugger gets no capture and behaves exactly as before. */
-function createCallValuesCapture(session: vscode.DebugSession): CallValuesCapture | undefined {
+function createCallValuesCapture(
+  session: vscode.DebugSession,
+  onCapture: (values: CallValues) => void, // per-step variable capture
+): CallValuesCapture | undefined {
   if (!CALL_VALUES_DEBUG_TYPES.includes(session.type)) {
     return undefined;
   }
@@ -91,6 +100,7 @@ function createCallValuesCapture(session: vscode.DebugSession): CallValuesCaptur
       }
     },
     publish: values => PathFindPanel.currentPanel?.setCallValues(values),
+    onCapture, // per-step variable capture: session history snapshots the same read
   });
   // --- expand complex variables feature ---
   // Lets the webview ask this capture for a variable's children. Last Python session wins; it is

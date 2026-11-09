@@ -4,8 +4,16 @@ import { advanceAnimationFrames, pendingAnimationFrames } from './animationFrame
 import { flowLines, GraphRenderer, graphStyles, historyStepLabel } from './graph'; // historyStepLabel: session history; flowLines: argument vs return feature
 import { NodeLocals } from './nodeLocals'; // local variables feature
 import { heatColor, heatPalette, type HeatRange } from './heatmap';
-import type { CallValue, GraphData, HotCounts, VariableChildren } from '../src/types';
+import type { CallValue, GraphData, HistoryStep, HotCounts, StepValues, VariableChildren } from '../src/types';
 import { paneModel, VariablePane } from './variablePane'; // variable inspector panel
+import { indexFrame, indexRun, indexStep, mergedStep, resolveName, watchMissText, watchModel } from './watchVariable'; // watch variable
+// --- search by value ---
+import { asNumber, matchTier, MAX_RESULTS, searchByValue, unquote } from './searchByValue';
+// --- end search by value ---
+import { MAX_HISTORY_ROWS, valueHistoryModel } from './variableHistory'; // variable history
+// --- variable timeline ---
+import { cellGlyph, cellLabel, MAX_COLUMNS, MAX_LANES, timelineModel, type CellState } from './variableTimeline';
+// --- end variable timeline ---
 import { largeSearchGraph } from '../src/test/mockdata';
 import { CASES } from '../src/test/cases';
 import { DEBUG_CASES } from '../src/test/debugCases';
@@ -53,6 +61,45 @@ class LocalsDiv {
   }
   public rows(): string[] { return this.children.map(child => child.textContent); }
 }
+
+// --- watch variable ---
+/** A fake element covering just the DOM surface VariablePane touches. */
+class PaneEl {
+  public className = '';
+  public textContent = '';
+  public title = '';
+  public type = '';
+  public children: PaneEl[] = [];
+  public dataset: Record<string, string> = {};
+  public style: Record<string, string> = {};
+  public attributes: Record<string, string> = {};
+  public clicks: (() => void)[] = [];
+  public readonly classes = new Set<string>();
+  public readonly classList = {
+    toggle: (name: string, on: boolean) => { if (on) this.classes.add(name); else this.classes.delete(name); },
+  };
+  public readonly ownerDocument = { createElement: (tag: string) => new PaneEl(tag) };
+  constructor(public readonly tag = 'div') {}
+  public appendChild(child: PaneEl): PaneEl { this.children.push(child); return child; }
+  public replaceChildren(...next: PaneEl[]): void { this.children = next; }
+  public setAttribute(name: string, value: string): void { this.attributes[name] = value; }
+  public addEventListener(_name: string, handler: () => void): void { this.clicks.push(handler); }
+  /** Section headings, in render order. */
+  public headings(): string[] {
+    return this.children.flatMap(section =>
+      section.children.filter(child => child.tag === 'h3').map(child => child.textContent));
+  }
+  public section(heading: string): PaneEl | undefined {
+    return this.children.find(child => child.children.some(c => c.tag === 'h3' && c.textContent.startsWith(heading)));
+  }
+}
+
+function paneRows(section: PaneEl | undefined): string[][] {
+  return (section?.children ?? [])
+    .filter(child => child.className.includes('pane-row'))
+    .map(row => row.children.map(cell => cell.textContent));
+}
+// --- end watch variable ---
 
 function withLocals(cy: Core, run: (f: {
   bands: LocalsDiv[]; flush(): void; locals: NodeLocals; hidden(): boolean;
@@ -1305,7 +1352,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
   }],
   ['pane: messages replace the sections when there is nothing honest to show', () => {
     assert.match(paneModel({ expanded: new Set(), children: new Map() }).message!, /Click a function/);
-    // History records only the path, so a scrubbed step has no variables - say so, do not guess.
+    // A scrubbed step that recorded no variables (not Python, no graph open, or evicted): say so.
     const scrubbed = paneModel({
       label: 'add', historyStep: true,
       value: { line: '(a=3)', atEntry: false, args: [{ name: 'a', value: '3' }] },
@@ -1321,7 +1368,761 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(returnOnly.message, undefined);
     assert.deepEqual(returnOnly.sections.map(s => s.id), ['return']);
   }],
+  // --- per-step variable capture ---
+  ['pane: a scrubbed step renders its recorded strings read-only, with no return section', () => {
+    const model = paneModel({
+      label: 'add', historyStep: true,
+      // The live pause's values belong to another moment: they must not leak into a past step.
+      value: { line: '(a=99)', atEntry: true, args: [{ name: 'a', value: '99', ref: 5 }] },
+      returnValue: '7',
+      historyValues: {
+        args: [{ name: 'a', value: '3' }, { name: 'b' }],
+        locals: [{ name: 'total', value: '[1, 2]' }],
+        localsCount: 4,
+      },
+      expanded: new Set(['locals/total']), // already open from a live pause: cannot reopen here
+      children: new Map(),
+    });
+    assert.equal(model.message, undefined);
+    assert.equal(model.stale, false); // an accurate reading of the past, not a stale one of the present
+    assert.deepEqual(model.sections.map(s => s.id), ['args', 'locals']); // no 'return'
+    assert.deepEqual(model.sections[0].rows.map(r => [r.name, r.value, r.ref, r.expanded]), [
+      ['a', '3', undefined, false],
+      ['b', '(not in locals)', undefined, false],
+    ]);
+    assert.match(model.sections[0].note!, /Recorded at this step: values as they were/);
+    assert.deepEqual(model.sections[1].rows.map(r => [r.name, r.value, r.ref]), [['total', '[1, 2]', undefined]]);
+    assert.equal(model.sections[1].note, '3 more not recorded.');
+    // atEntry changes only the caveat.
+    const entry = paneModel({
+      label: 'add', historyStep: true, historyValues: { args: [], locals: [], atEntry: true },
+      expanded: new Set(), children: new Map(),
+    });
+    assert.match(entry.sections[0].note!, /paused on the first line/);
+    assert.equal(entry.sections[0].rows.length, 0);
+    assert.equal(entry.sections[0].empty, 'No parameters.');
+  }],
+  // --- end per-step variable capture ---
   // --- end variable inspector panel ---
+  // --- watch variable ---
+  ['watch: one name across the path, arguments before locals, with the origin kept', () => {
+    const model = watchModel('total', [
+      { id: 'main', label: 'main', values: { args: [], locals: [{ name: 'total', value: '0' }] } },
+      { id: 'add', label: 'add', values: { args: [{ name: 'total', value: '3' }], locals: [] } },
+      // Present in both: the parameter wins, and the row says so.
+      { id: 'inner', label: 'inner', values: { args: [{ name: 'total', value: '9' }], locals: [{ name: 'total', value: '99' }] } },
+    ]);
+    assert.deepEqual(model.rows.map(r => [r.label, r.value, r.origin]), [
+      ['main', '0', 'local'],
+      ['add', '3', 'arg'],
+      ['inner', '9', 'arg'],
+    ]);
+    assert.equal(model.found, 3);
+    assert.equal(model.note, 'Found at 3 of 3 functions on this path.');
+    // The suggestion list is every name the path offers, deduplicated and sorted.
+    assert.deepEqual(model.names, ['total']);
+  }],
+  ['watch: stars are stripped on both sides, and the match is case-sensitive', () => {
+    const frames = [{
+      id: 'f', label: 'f',
+      values: { args: [{ name: '*args', value: '(1, 2)' }, { name: '**kwargs', value: '{}' }], locals: [] },
+    }];
+    // formatCallValue stores parameters under their display name, so typing the bare name must hit.
+    assert.equal(watchModel('args', frames).rows[0].value, '(1, 2)');
+    assert.equal(watchModel('kwargs', frames).rows[0].value, '{}');
+    assert.equal(watchModel('*args', frames).rows[0].value, '(1, 2)'); // typing the stars works too
+    assert.deepEqual(watchModel('', frames).names, ['args', 'kwargs']); // suggested without stars
+    // Python identifiers are case-sensitive: Total is not total.
+    const cased = [{ id: 'f', label: 'f', values: { args: [{ name: 'total', value: '1' }], locals: [] } }];
+    assert.equal(watchModel('Total', cased).rows[0].miss, 'not-present');
+  }],
+  ['watch: the five no-value cases stay apart', () => {
+    const model = watchModel('total', [
+      { id: 'pathfinder-unmatched-frame-0' },                       // no label: not in this graph
+      { id: 'cold', label: 'cold' },                                // no values captured at all
+      { id: 'other', label: 'other', values: { args: [{ name: 'n', value: '1' }], locals: [] } },
+      { id: 'capped', label: 'capped', values: { args: [], locals: [{ name: 'x', value: '1' }], localsCount: 30 } },
+      { id: 'gone', label: 'gone', values: { args: [{ name: 'total' }], locals: [] } }, // deleted
+    ]);
+    assert.deepEqual(model.rows.map(r => [r.label, r.miss]), [
+      ['(outside graph)', 'outside'],
+      ['cold', 'no-capture'],       // we know nothing: says nothing about the variable
+      ['other', 'not-present'],     // captured, genuinely absent: the informative answer
+      ['capped', 'maybe-capped'],   // the caps dropped locals, so absence is not ours to claim
+      ['gone', 'no-value'],         // found, but not in Locals
+    ]);
+    assert.equal(model.rows.every(r => r.value === undefined), true);
+    assert.equal(model.found, 0);
+    assert.equal(model.note, 'Not found on this path. Check the name, or pause deeper in the call chain.');
+    // Each one reads differently, because each one means something different.
+    assert.equal(new Set(model.rows.map(r => watchMissText(r.miss!))).size, 5);
+    // The outside row is not counted as a function of the path.
+    assert.equal(watchModel('n', [{ id: 'x' }, { id: 'other', label: 'other', values: { args: [{ name: 'n', value: '1' }], locals: [] } }]).note,
+      'Found at 1 of 1 function on this path.');
+  }],
+  ['watch: a recursive node collapses to one row rather than repeating its innermost value', () => {
+    const fact = { id: 'fact', label: 'fact', values: { args: [{ name: 'n', value: '1' }], locals: [] } };
+    const model = watchModel('n', [
+      { id: 'main', label: 'main', values: { args: [], locals: [] } },
+      fact, fact, fact, // the same node three times: only the innermost frame was captured
+    ]);
+    // Printing 1 three times would read as "n never changed", which is false.
+    assert.deepEqual(model.rows.map(r => [r.label, r.repeats, r.value]), [
+      ['main', 1, undefined],
+      ['fact', 3, '1'],
+    ]);
+    assert.equal(model.found, 1);
+    // Consecutive unmatched frames collapse the way the breadcrumb collapses them.
+    const outside = watchModel('n', [{ id: 'a' }, { id: 'b' }, { id: 'main', label: 'main' }]);
+    assert.deepEqual(outside.rows.map(r => [r.label, r.repeats]), [['(outside graph)', 2], ['main', 1]]);
+  }],
+  ['watch: messages replace the rows when there is nothing to resolve', () => {
+    const frames = [{ id: 'f', label: 'f', values: { args: [{ name: 'n', value: '1' }], locals: [] } }];
+    const empty = watchModel('   ', frames);
+    assert.match(empty.message!, /Type a variable name/);
+    assert.deepEqual(empty.rows, []);
+    assert.deepEqual(empty.names, ['n']); // still suggested, so the list is ready before you type
+    const noPath = watchModel('n', []);
+    assert.match(noPath.message!, /No path highlighted/);
+    assert.deepEqual(noPath.rows, []);
+  }],
+  ['watch: a live CallValue and a recorded StepValues both satisfy WatchSource unchanged', () => {
+    // Neither shape is converted anywhere: this is the reuse the feature is built on.
+    const live: CallValue = {
+      line: '(n=2)', atEntry: false, args: [{ name: 'n', value: '2', ref: 7, type: 'int' }],
+      locals: [{ name: 'acc', value: '6', ref: 8 }], localsRows: ['acc=6'], localsCount: 1,
+    };
+    const recorded: StepValues = {
+      args: [{ name: 'n', value: '5' }], locals: [{ name: 'acc', value: '7' }], localsCount: 1,
+    };
+    const model = watchModel('acc', [
+      { id: 'live', label: 'live', values: live },
+      { id: 'recorded', label: 'recorded', values: recorded },
+    ]);
+    assert.deepEqual(model.rows.map(r => [r.label, r.value, r.origin]), [
+      ['live', '6', 'local'],
+      ['recorded', '7', 'local'],
+    ]);
+    assert.deepEqual(model.names, ['acc', 'n']);
+  }],
+  ['watch: the section renders above the inspector, with no selection, and keeps twisties open', () => {
+    const host = new PaneEl();
+    const title = new PaneEl();
+    const requested: number[] = [];
+    const suggested: string[][] = [];
+    const pane = new VariablePane(host as unknown as HTMLElement, title as unknown as HTMLElement, {
+      requestChildren: ref => requested.push(ref),
+      watchNamesChanged: names => suggested.push(names),
+    });
+    const frames = [
+      { id: 'main', label: 'main', values: { args: [], locals: [{ name: 'total', value: '0' }] } },
+      { id: 'add', label: 'add', values: { args: [{ name: 'total', value: '3' }], locals: [] } },
+    ];
+
+    // Nothing selected: the inspector has only a message, but the watch still has something to say.
+    pane.setWatch('total', frames);
+    assert.equal(pane.watched, 'total');
+    assert.deepEqual(host.headings(), ['Watch: total', 'History: total']); // variable history: siblings
+    assert.deepEqual(paneRows(host.section('Watch')), [['main', '0', 'local'], ['add', '3', 'arg']]);
+    assert.deepEqual(suggested.at(-1), ['total']); // the input's suggestion list follows the path
+
+    // With a selection, the watch comes FIRST and the inspector's own sections follow intact.
+    pane.update({
+      label: 'add',
+      value: { line: '(items=[1])', atEntry: false, args: [{ name: 'items', value: '[1]', ref: 4 }] },
+      children: new Map(),
+    });
+    assert.deepEqual(host.headings(),
+      ['Watch: total', 'History: total', 'Arguments', 'Local variables', 'Return value']);
+
+    // Open the argument's twisty, then re-render the watch: the disclosure must stay open.
+    const twisty = host.section('Arguments')!.children.find(child => child.className === 'pane-row')!
+      .children.find(child => child.className === 'pane-twisty')!;
+    twisty.clicks[0]();
+    assert.deepEqual(requested, [4]);
+    const opened = () => host.section('Arguments')!.children
+      .some(row => row.children.some(cell => cell.attributes['aria-expanded'] === 'true'));
+    assert.equal(opened(), true);
+    pane.setWatch('total', [...frames, { id: 'deep', label: 'deep' }]);
+    assert.equal(opened(), true, 'a watch refresh must not collapse the inspector');
+    assert.deepEqual(paneRows(host.section('Watch')).at(-1), ['deep', 'not recorded']);
+
+    // An empty name takes the section away entirely: the pane is exactly what it was before.
+    pane.setWatch('', frames);
+    assert.deepEqual(host.headings(), ['Arguments', 'Local variables', 'Return value']);
+  }],
+  // --- end watch variable ---
+  // --- variable history ---
+  ['history: one entry per change, collapsing consecutive steps with the same value AND node', () => {
+    const at = (node: string, value: string, time: number): HistoryStep => ({
+      path: ['main', node], reason: 'step', time, session: 'Run',
+      values: { [node]: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    const model = valueHistoryModel('n', [
+      at('fact', '3', 10), at('fact', '3', 20), at('fact', '3', 30), // one run: n did not change
+      at('fact', '2', 40),
+      at('other', '2', 50), // same value, different node: a different fact, so a new entry
+      at('fact', '2', 60),
+    ], id => id);
+    assert.deepEqual(model.rows.map(r => r.kind === 'value' ? [r.label, r.value, r.index, r.lastIndex, r.steps] : r.kind), [
+      ['fact', '3', 0, 2, 3],
+      ['fact', '2', 3, 3, 1],
+      ['other', '2', 4, 4, 1],
+      ['fact', '2', 5, 5, 1],
+    ]);
+    assert.equal(model.hits, 6);   // every step had a value
+    assert.equal(model.changes, 4); // but only four of them were changes
+    assert.equal(model.total, 6);
+    assert.equal(model.note, 'n had a value at 6 of 6 recorded steps · 4 changes.');
+  }],
+  ['history: steps without a value are omitted as rows but reported as gaps', () => {
+    const withValue = (value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    const absent: HistoryStep = { // captured, but the name is not there
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'other', value: '1' }], locals: [] } },
+    };
+    const unrecorded: HistoryStep = { path: ['f'], reason: 'step', time: 0, session: 'Run' }; // no values at all
+    const model = valueHistoryModel('n', [
+      withValue('1'), absent, unrecorded, absent, withValue('1'), unrecorded,
+    ], id => id);
+    // The two sides of a gap mean different things and are counted apart.
+    assert.deepEqual(model.rows.map(r => r.kind === 'value' ? ['value', r.value] : ['gap', r.steps, r.unrecorded]), [
+      ['value', '1'],
+      ['gap', 3, 1],
+      ['value', '1'], // the gap broke the run, so the same value is a new entry, not a collapse
+    ]);
+    assert.equal(model.hits, 2);
+    assert.equal(model.unrecorded, 2); // including the trailing one
+    assert.equal(model.note, 'n had a value at 2 of 6 recorded steps · 2 recorded no variables.');
+  }],
+  ['history: a trailing gap is not a row, and the innermost matching node wins', () => {
+    const deep: HistoryStep = {
+      // Outer caller first: main -> mid -> inner. The name is in two frames; the inner one answers.
+      path: ['main', 'mid', 'inner'], reason: 'step', time: 5, session: 'Run',
+      values: {
+        main: { args: [{ name: 'n', value: 'outer' }], locals: [] },
+        inner: { args: [], locals: [{ name: 'n', value: 'innermost' }] },
+      },
+    };
+    const model = valueHistoryModel('n', [deep, { path: ['main'], reason: 'step', time: 9, session: 'Run' }],
+      id => id.toUpperCase());
+    assert.equal(model.rows.length, 1); // the trailing valueless step adds no gap row
+    const entry = model.rows[0];
+    assert.equal(entry.kind === 'value' && entry.value, 'innermost');
+    assert.equal(entry.kind === 'value' && entry.nodeId, 'inner');
+    assert.equal(entry.kind === 'value' && entry.origin, 'local');
+    assert.equal(entry.kind === 'value' && entry.label, 'INNER'); // named by labelOf, not by step.where
+    assert.equal(entry.kind === 'value' && entry.time, 5);
+  }],
+  ['history: shares the watch name matching, stars and case included', () => {
+    const step = (name: string, value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name, value }], locals: [] } },
+    });
+    // resolveName is the single implementation, so *args behaves exactly as it does in the watch.
+    assert.equal(valueHistoryModel('args', [step('*args', '(1,)')], id => id).hits, 1);
+    assert.equal(valueHistoryModel('*args', [step('*args', '(1,)')], id => id).hits, 1);
+    assert.equal(valueHistoryModel('kwargs', [step('**kwargs', '{}')], id => id).hits, 1);
+    assert.equal(valueHistoryModel('Total', [step('total', '1')], id => id).hits, 0);
+    // The same lookup through the watch agrees, which is the point of sharing resolveName.
+    assert.equal(resolveName({ args: [{ name: '*args', value: '(1,)' }] }, 'args').value, '(1,)');
+    assert.equal(resolveName({ args: [{ name: 'total', value: '1' }] }, 'Total').miss, 'not-present');
+  }],
+  ['history: messages when nothing is typed, nothing recorded, or nothing captured', () => {
+    const step: HistoryStep = {
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value: '1' }], locals: [] } },
+    };
+    assert.match(valueHistoryModel('  ', [step]).message!, /Type a variable name/);
+    // History-only: while recording, the message carries no steps, so this is the empty case.
+    assert.match(valueHistoryModel('n', []).message!, /No recorded session yet/);
+    assert.equal(valueHistoryModel('n', []).rows.length, 0);
+    // A whole session that recorded no variables says so, rather than blaming the name.
+    const blind: HistoryStep = { path: ['f'], reason: 'step', time: 0, session: 'Run' };
+    assert.match(valueHistoryModel('n', [blind, blind]).note!, /No variables were recorded for this session/);
+    // Recorded, but the name is nowhere.
+    assert.equal(valueHistoryModel('zzz', [step], id => id).note, 'zzz had no value at any of 1 recorded step.');
+  }],
+  ['history: entries past the cap are counted, not drawn', () => {
+    const steps: HistoryStep[] = Array.from({ length: MAX_HISTORY_ROWS + 25 }, (_, i) => ({
+      path: ['f'], reason: 'step', time: i, session: 'Run',
+      values: { f: { args: [{ name: 'n', value: String(i) }], locals: [] } }, // a change every step
+    }));
+    const model = valueHistoryModel('n', steps, id => id);
+    assert.equal(model.rows.length, MAX_HISTORY_ROWS);
+    assert.equal(model.changes, MAX_HISTORY_ROWS + 25);
+    assert.equal(model.more, 25);
+    // The kept rows are the earliest, so the run reads from its start.
+    assert.equal(model.rows[0].kind === 'value' && model.rows[0].value, '0');
+  }],
+  ['history: the section renders rows and gaps, and clicking a row picks that step', () => {
+    const host = new PaneEl();
+    const picked: number[] = [];
+    const pane = new VariablePane(host as unknown as HTMLElement, new PaneEl() as unknown as HTMLElement, {
+      requestChildren: () => {},
+      historyStepPicked: index => picked.push(index),
+      labelOf: id => id.toUpperCase(),
+    });
+    const hit = (value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    const blank: HistoryStep = { path: ['f'], reason: 'step', time: 0, session: 'Run' };
+
+    // Nothing recorded yet: the section still appears, with the scrubber's kind of message.
+    pane.setWatch('n', []);
+    pane.setHistory([]);
+    assert.deepEqual(host.headings(), ['Watch: n', 'History: n']);
+    assert.match(host.section('History')!.children[1].textContent, /No recorded session yet/);
+
+    pane.setHistory([hit('1'), hit('1'), blank, hit('2')]);
+    const section = host.section('History')!;
+    // Two collapsed steps, a gap marker, then the change. The step numbers are 1-based.
+    assert.deepEqual(paneRows(section), [['1-2', 'F', '1'], ['4', 'F', '2']]);
+    const gaps = section.children.filter(child => child.className.includes('vhistory-gap'));
+    assert.equal(gaps.length, 1);
+    assert.match(gaps[0].textContent, /1 step.* recorded no variables/);
+
+    // Clicking a row reports the FIRST step of its run, which is where a jump should land.
+    const rows = section.children.filter(child => child.className.includes('vhistory-row'));
+    assert.equal(rows[0].tag, 'button'); // a real control, so it is keyboard reachable
+    assert.equal(rows[0].dataset.step, '0');
+    rows[0].clicks[0]();
+    rows[1].clicks[0]();
+    assert.deepEqual(picked, [0, 3]);
+
+    // Clearing the name takes both sections away together.
+    pane.setWatch('', []);
+    assert.deepEqual(host.headings(), []);
+  }],
+  // --- end variable history ---
+  // --- variable timeline ---
+  ['timeline: one lane per name, cells marking changed / same / absent / not-recorded', () => {
+    const step = (vals: Record<string, string> | undefined): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      ...(vals ? { values: { f: { args: [], locals: Object.entries(vals).map(([name, value]) => ({ name, value })) } } } : {}),
+    });
+    const model = timelineModel([
+      step({ n: '1', other: '9' }),
+      step({ n: '1' }),          // n held; other was measured and is gone
+      step(undefined),           // nothing recorded: says nothing about either
+      step({ n: '2', other: '9' }),
+    ]);
+    const lane = (name: string) => model.lanes.find(l => l.name === name)!;
+    assert.deepEqual(lane('n').cells.map(c => c.state), ['changed', 'same', 'unrecorded', 'changed']);
+    // 'absent' (measured, not there) and 'unrecorded' (nothing measured) stay distinct.
+    assert.deepEqual(lane('other').cells.map(c => c.state), ['changed', 'absent', 'unrecorded', 'same']);
+    assert.equal(lane('n').changes, 2);
+    assert.equal(lane('n').present, 3);
+    assert.equal(model.bucket, 1);
+    assert.equal(model.columns, 4);
+    assert.equal(model.note, '2 variables · 4 steps · one column per step · 1 recorded no variables.');
+    // Every state has its own glyph, and 'absent' is the only blank one.
+    const states: CellState[] = ['changed', 'same', 'absent', 'unrecorded'];
+    assert.deepEqual(states.map(cellGlyph), ['◆', '·', '', '?']);
+    // Each cell says what it means in words, so shape is never the only channel.
+    assert.equal(cellLabel('n', lane('n').cells[0]), 'step 1 · n = 1 (changed)');
+    assert.equal(cellLabel('n', lane('n').cells[1]), 'step 2 · n = 1');
+    assert.equal(cellLabel('other', lane('other').cells[1]), 'step 2 · other not in scope');
+    assert.equal(cellLabel('n', lane('n').cells[2]), 'step 3 · no variables recorded');
+  }],
+  ['timeline: a value unchanged across an unrecorded gap reads as held, not changed', () => {
+    const at = (value?: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      ...(value === undefined ? {} : { values: { f: { args: [{ name: 'n', value }], locals: [] } } }),
+    });
+    // A gap we could not observe is no evidence of a change.
+    const lane = timelineModel([at('1'), at(undefined), at('1'), at('2')]).lanes[0];
+    assert.deepEqual(lane.cells.map(c => c.state), ['changed', 'unrecorded', 'same', 'changed']);
+    assert.equal(lane.changes, 2);
+    assert.equal(lane.origin, 'arg'); // it was a parameter every time
+  }],
+  ['timeline: lanes rank by changes then presence, pinned first, and the cap is reported', () => {
+    // 'busy' changes every step, 'calm' never, 'rare' appears once.
+    const steps: HistoryStep[] = Array.from({ length: 6 }, (_, i) => ({
+      path: ['f'], reason: 'step', time: i, session: 'Run',
+      values: {
+        f: {
+          args: [],
+          locals: [
+            { name: 'busy', value: String(i) },
+            { name: 'calm', value: 'k' },
+            ...(i === 0 ? [{ name: 'rare', value: 'r' }] : []),
+          ],
+        },
+      },
+    }));
+    assert.deepEqual(timelineModel(steps).lanes.map(l => l.name), ['busy', 'calm', 'rare']);
+    // The watched name is pinned to the front so this agrees with the watch and history sections.
+    const pinnedModel = timelineModel(steps, { pinned: 'calm' });
+    assert.deepEqual(pinnedModel.lanes.map(l => [l.name, l.pinned]),
+      [['calm', true], ['busy', false], ['rare', false]]);
+    // The pin shares the watch's star rule, so a typed *name still matches.
+    assert.equal(timelineModel(steps, { pinned: '*calm' }).lanes[0].name, 'calm');
+
+    // Past MAX_LANES the rest are counted, not drawn.
+    const wide: HistoryStep[] = [{
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: {
+        f: {
+          args: [],
+          locals: Array.from({ length: MAX_LANES + 7 }, (_, i) => ({ name: `v${i}`, value: '1' })),
+        },
+      },
+    }];
+    const capped = timelineModel(wide);
+    assert.equal(capped.lanes.length, MAX_LANES);
+    assert.equal(capped.names, MAX_LANES + 7);
+    assert.equal(capped.more, 7);
+  }],
+  ['timeline: beyond MAX_COLUMNS the run is bucketed, strongest state wins, clicks find the change', () => {
+    // Four times the column cap, with a change only at one step inside one bucket.
+    const total = MAX_COLUMNS * 4;
+    const changeAt = MAX_COLUMNS * 4 - 3;
+    const steps: HistoryStep[] = Array.from({ length: total }, (_, i) => ({
+      path: ['f'], reason: 'step', time: i, session: 'Run',
+      values: { f: { args: [{ name: 'n', value: i >= changeAt ? 'late' : 'early' }], locals: [] } },
+    }));
+    const model = timelineModel(steps);
+    assert.equal(model.bucket, 4);
+    assert.equal(model.columns, MAX_COLUMNS); // the whole run is represented, never truncated
+    assert.equal(model.steps, total);
+    assert.match(model.note!, /each column = 4 steps/);
+    const cells = model.lanes[0].cells;
+    // Only the first and the late bucket changed; everything between held.
+    assert.equal(cells[0].state, 'changed');
+    assert.equal(cells[1].state, 'same');
+    const changed = cells.filter(c => c.state === 'changed');
+    assert.equal(changed.length, 2);
+    // A bucket covers a range, and a click lands on the first CHANGED step inside it.
+    const late = changed[1];
+    assert.equal(late.target, changeAt);
+    assert.ok(late.step <= changeAt && changeAt <= late.lastStep);
+    assert.equal(late.value, 'late');
+    assert.equal(cellLabel('n', late), `steps ${late.step + 1}-${late.lastStep + 1} · n = late (changed)`);
+    // A bucket with no change lands on the first step that held the value.
+    assert.equal(cells[1].target, cells[1].step);
+  }],
+  ['timeline: degrades like the history when there is nothing recorded', () => {
+    const empty = timelineModel([]);
+    assert.match(empty.message!, /No recorded session yet/);
+    assert.deepEqual(empty.lanes, []);
+    // A session that recorded no variables says so, rather than blaming any name.
+    const blind: HistoryStep[] = [{ path: ['f'], reason: 'step', time: 0, session: 'Run' }];
+    const none = timelineModel(blind);
+    assert.equal(none.message, undefined);
+    assert.equal(none.note, 'No variables were recorded for this session.');
+    assert.deepEqual(none.lanes, []);
+  }],
+  ['timeline: indexFrame agrees with resolveName on precedence, stars and valueless entries', () => {
+    // Both read frameEntries, so a bulk scan and a single lookup cannot disagree.
+    const frame = {
+      args: [{ name: '*args', value: '(1,)' }, { name: 'dup', value: 'from-arg' }, { name: 'gone' }],
+      locals: [{ name: 'dup', value: 'from-local' }, { name: 'only', value: 'L' }],
+    };
+    const index = indexFrame(frame);
+    assert.deepEqual([...index.keys()], ['args', 'dup', 'gone', 'only']);
+    for (const name of index.keys()) {
+      assert.deepEqual(index.get(name), resolveName(frame, name), `disagreement on ${name}`);
+    }
+    assert.deepEqual(index.get('dup'), { origin: 'arg', value: 'from-arg' }); // parameters win
+    assert.deepEqual(index.get('only'), { origin: 'local', value: 'L' });
+    assert.deepEqual(index.get('gone'), { origin: 'arg', miss: 'no-value' });
+    // A valueless entry is charted as absent: there is nothing to plot and it is not a change.
+    const lane = timelineModel([{
+      path: ['f'], reason: 'step', time: 0, session: 'Run', values: { f: { args: [{ name: 'gone' }], locals: [] } },
+    }]).lanes[0];
+    assert.equal(lane.cells[0].state, 'absent');
+    assert.equal(lane.present, 0);
+  }],
+  ['timeline: the innermost frame of a step shadows an outer one of the same name', () => {
+    const model = timelineModel([{
+      path: ['outer', 'inner'], reason: 'step', time: 0, session: 'Run',
+      values: {
+        outer: { args: [{ name: 'n', value: 'OUTER' }], locals: [] },
+        inner: { args: [{ name: 'n', value: 'INNER' }], locals: [] },
+      },
+    }]);
+    // The same choice the history makes about which frame answers for a step.
+    assert.equal(model.lanes[0].cells[0].value, 'INNER');
+    assert.equal(model.names, 1);
+  }],
+  ['timeline: renders lanes, only meaningful cells are buttons, and a click picks that step', () => {
+    const host = new PaneEl();
+    const picked: number[] = [];
+    const pane = new VariablePane(host as unknown as HTMLElement, new PaneEl() as unknown as HTMLElement, {
+      requestChildren: () => {},
+      historyStepPicked: index => picked.push(index),
+    });
+    const step = (vals?: Record<string, string>): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      ...(vals ? { values: { f: { args: [], locals: Object.entries(vals).map(([name, value]) => ({ name, value })) } } } : {}),
+    });
+
+    // Always present, even with nothing recorded and no name watched - but collapsed.
+    pane.setHistory([]);
+    const closed = host.children.find(child => child.tag === 'details')!;
+    assert.equal(closed.attributes.open, undefined);
+    assert.equal(closed.children[0].textContent, 'Variable timeline');
+    assert.match(closed.children[1].textContent, /No recorded session yet/);
+
+    pane.setHistory([step({ n: '1' }), step({ n: '1' }), step(undefined), step({ n: '2' })]);
+    const section = host.children.find(child => child.tag === 'details')!;
+    assert.equal(section.children[0].textContent, 'Variable timeline (1 across 4 steps)');
+    const lanes = section.children.find(child => child.className === 'vtimeline-grid')!.children;
+    assert.equal(lanes.length, 1);
+    assert.equal(lanes[0].children[0].textContent, 'n');
+    assert.match(lanes[0].children[0].title, /2 changes · present at 3 of 4 steps · local/);
+
+    const cells = lanes[0].children[1].children;
+    assert.deepEqual(cells.map(c => c.dataset.state), ['changed', 'same', 'unrecorded', 'changed']);
+    // Shape differs per state, and every cell carries the state in words too.
+    assert.deepEqual(cells.map(c => c.textContent), ['◆', '·', '?', '◆']);
+    assert.equal(cells[2].attributes['aria-label'], 'step 3 · no variables recorded');
+    // Only cells with a step worth visiting are focusable controls.
+    assert.deepEqual(cells.map(c => c.tag), ['button', 'button', 'span', 'button']);
+    cells[3].clicks[0]();
+    cells[0].clicks[0]();
+    assert.deepEqual(picked, [3, 0]);
+    // An unrecorded cell is inert: nothing to go to.
+    assert.equal(cells[2].clicks.length, 0);
+
+    // Opening is remembered across re-renders (in memory, by design).
+    section.children[0].clicks[0]();
+    pane.setWatch('n', []);
+    assert.equal(host.children.find(child => child.tag === 'details')!.attributes.open, 'open');
+  }],
+  ['timeline: the history and timeline models are reused until the run or the name changes', () => {
+    const host = new PaneEl();
+    let labelCalls = 0;
+    const pane = new VariablePane(host as unknown as HTMLElement, new PaneEl() as unknown as HTMLElement, {
+      requestChildren: () => {},
+      labelOf: id => { labelCalls++; return id; },
+    });
+    const steps: HistoryStep[] = Array.from({ length: 5 }, (_, i) => ({
+      path: ['f'], reason: 'step', time: i, session: 'Run',
+      values: { f: { args: [{ name: 'n', value: String(i) }], locals: [] } },
+    }));
+    pane.setHistory(steps);
+    pane.setWatch('n', []);
+    const after = labelCalls;
+    assert.ok(after > 0, 'the history model was built at least once');
+    // render() runs on every path change; the whole-run scan must not run again with it.
+    pane.setWatch('n', []);
+    pane.setWatch('n', []);
+    assert.equal(labelCalls, after, 'the cached model was rebuilt on an unchanged run and name');
+    // A new name invalidates it.
+    pane.setWatch('other', []);
+    assert.ok(labelCalls >= after, 'a name change rebuilds the history model');
+  }],
+  // --- end variable timeline ---
+  // --- search by value ---
+  ['search: exact matching looks through a string repr quotes and prefixes', () => {
+    assert.equal(unquote("'hello'"), 'hello');
+    assert.equal(unquote('"hello"'), 'hello');
+    assert.equal(unquote("b'hi'"), 'hi');
+    assert.equal(unquote("f'hi'"), 'hi');
+    assert.equal(unquote('7'), undefined);        // not a string repr
+    assert.equal(unquote("'mismatched\""), undefined); // quotes must match
+    // So the value can be typed as the text, not as its repr.
+    assert.equal(matchTier("'hello'", 'hello', false), 'exact');
+    assert.equal(matchTier("'hello'", "'hello'", false), 'exact'); // typing the repr works too
+    assert.equal(matchTier('None', 'None', false), 'exact');
+    // Case-sensitive throughout, like the name matching in the sibling features.
+    assert.equal(matchTier("'Hello'", 'hello', false), undefined);
+    assert.equal(matchTier('True', 'true', false), undefined);
+  }],
+  ['search: the numeric tier equates 7 and 7.0 but never a different number', () => {
+    assert.equal(asNumber('7'), 7);
+    assert.equal(asNumber('7.0'), 7);
+    assert.equal(asNumber('1_000'), 1000);  // Python underscores
+    assert.equal(asNumber('-inf'), -Infinity);
+    assert.equal(asNumber('2j'), undefined); // complex is not compared numerically
+    assert.equal(asNumber('nan'), undefined); // NaN equals nothing, so it is left to exact matching
+    assert.equal(asNumber('hello'), undefined);
+    assert.equal(matchTier('7.0', '7', false), 'numeric');
+    assert.equal(matchTier('7', '7.0', false), 'numeric');
+    assert.equal(matchTier('7e0', '7', false), 'numeric');
+    assert.equal(matchTier('17', '7', false), undefined);
+    assert.equal(matchTier('8', '7', false), undefined);
+    // nan still matches itself exactly, which is the only honest way to find it.
+    assert.equal(matchTier('nan', 'nan', false), 'exact');
+  }],
+  ['search: contains is off by default and boundary-aware for numbers', () => {
+    // Off by default: a value search means "where was this value".
+    assert.equal(matchTier('[7, 8]', '7', false), undefined);
+    assert.equal(matchTier('[7, 8]', '7', true), 'contains');
+    assert.equal(matchTier("{'a': 7}", '7', true), 'contains');
+    // The boundary rule is what keeps the loose tier usable: 7 is not 17, 27 or 0.75.
+    assert.equal(matchTier('17', '7', true), undefined);
+    assert.equal(matchTier('0.75', '7', true), undefined);
+    assert.equal(matchTier('[x7]', '7', true), undefined);
+    assert.equal(matchTier('[27, 7]', '7', true), 'contains'); // the second element does match
+    // Text queries are a plain substring: no numeric neighbours to confuse them with.
+    assert.equal(matchTier("'hello world'", 'hello', true), 'contains');
+    assert.equal(matchTier("['a', 'hello']", 'hello', true), 'contains');
+    // A stronger tier always wins over contains.
+    assert.equal(matchTier('7', '7', true), 'exact');
+    assert.equal(matchTier('7.0', '7', true), 'numeric');
+  }],
+  ['search: rows carry the step, node, variable, stored repr, origin and tier', () => {
+    const step = (node: string, args: Record<string, string>, locals: Record<string, string> = {}): HistoryStep => ({
+      path: ['main', node], reason: 'step', time: 0, session: 'Run',
+      values: {
+        [node]: {
+          args: Object.entries(args).map(([name, value]) => ({ name, value })),
+          locals: Object.entries(locals).map(([name, value]) => ({ name, value })),
+        },
+      },
+    });
+    const model = searchByValue('7', [step('add', { n: '7' }, { total: '7.0' })], { labelOf: id => id.toUpperCase() });
+    assert.deepEqual(model.rows.map(r => [r.index, r.label, r.name, r.value, r.origin, r.tier]), [
+      [0, 'ADD', 'n', '7', 'arg', 'exact'],
+      [0, 'ADD', 'total', '7.0', 'local', 'numeric'], // the stored repr, so the match explains itself
+    ]);
+    assert.equal(model.hits, 2);
+    assert.equal(model.variables, 2);
+    assert.equal(model.steps, 1);
+    assert.equal(model.note, '7 found in 2 variables across 1 of 1 recorded step.');
+    // A miss suggests the toggle rather than just saying no.
+    assert.match(searchByValue('zzz', [step('add', { n: '7' })]).note!, /Try "contains"/);
+  }],
+  ['search: consecutive (node, name, value) runs collapse; a gap starts a new row', () => {
+    const at = (value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    const model = searchByValue('7', [at('7'), at('7'), at('8'), at('7')], { labelOf: id => id });
+    // Two rows, not three hits listed separately: the loop collapses, the return does not.
+    assert.deepEqual(model.rows.map(r => [r.index, r.lastIndex, r.steps]), [[0, 1, 2], [3, 3, 1]]);
+    assert.equal(model.hits, 3);     // raw hits are still counted
+    assert.equal(model.steps, 3);
+    // The same value in a DIFFERENT function is never collapsed into one row.
+    const two: HistoryStep = {
+      path: ['a', 'b'], reason: 'step', time: 0, session: 'Run',
+      values: { a: { args: [{ name: 'n', value: '7' }], locals: [] }, b: { args: [{ name: 'n', value: '7' }], locals: [] } },
+    };
+    const split = searchByValue('7', [two], { labelOf: id => id });
+    assert.deepEqual(split.rows.map(r => r.nodeId), ['b', 'a']); // innermost frame first
+  }],
+  ['search: contains results are ordered exact then numeric then contains, else by step', () => {
+    const step = (value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'v', value }], locals: [] } },
+    });
+    // Loose hit first in time, precise hits later.
+    const steps = [step('[7, 8]'), step('7.0'), step('7')];
+    const loose = searchByValue('7', steps, { contains: true, labelOf: id => id });
+    assert.deepEqual(loose.rows.map(r => [r.tier, r.index]), [['exact', 2], ['numeric', 1], ['contains', 0]]);
+    // Without the toggle only the precise ones survive, in step order.
+    const tight = searchByValue('7', steps, { labelOf: id => id });
+    assert.deepEqual(tight.rows.map(r => [r.tier, r.index]), [['numeric', 1], ['exact', 2]]);
+  }],
+  ['search: capped values are flagged, and the cap reports the overflow', () => {
+    const long = `${'x'.repeat(79)}…`; // what shortenValue leaves behind at capture
+    const capped = searchByValue('xxx', [{
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'v', value: long }], locals: [] } },
+    }], { contains: true, labelOf: id => id });
+    assert.equal(capped.truncated, true);
+    assert.match(capped.note!, /capped at capture/);
+
+    const many: HistoryStep[] = Array.from({ length: MAX_RESULTS + 12 }, (_, i) => ({
+      path: [`f${i}`], reason: 'step', time: i, session: 'Run', // a new node each step: no collapsing
+      values: { [`f${i}`]: { args: [{ name: 'n', value: '7' }], locals: [] } },
+    }));
+    const over = searchByValue('7', many, { labelOf: id => id });
+    assert.equal(over.rows.length, MAX_RESULTS);
+    assert.equal(over.more, 12);
+    assert.equal(over.hits, MAX_RESULTS + 12);
+  }],
+  ['search: degrades like the history, and a valueless entry cannot match', () => {
+    assert.match(searchByValue('7', []).message!, /No recorded session yet/);
+    assert.match(searchByValue('  ', [{ path: ['f'], reason: 'step', time: 0, session: 'Run' }]).message!,
+      /Type a value/);
+    // A session that captured nothing says so, rather than implying the value is absent.
+    const blind = searchByValue('7', [{ path: ['f'], reason: 'step', time: 0, session: 'Run' }]);
+    assert.equal(blind.message, undefined);
+    assert.equal(blind.note, 'No variables were recorded for this session.');
+    // A parameter that was not in Locals has no value, so there is nothing to match.
+    const none = searchByValue('7', [{
+      path: ['f'], reason: 'step', time: 0, session: 'Run', values: { f: { args: [{ name: 'gone' }], locals: [] } },
+    }]);
+    assert.equal(none.rows.length, 0);
+    assert.equal(none.hits, 0);
+  }],
+  ['search: a prebuilt run index gives identical results to indexing on demand', () => {
+    const steps: HistoryStep[] = Array.from({ length: 8 }, (_, i) => ({
+      path: ['outer', 'inner'], reason: 'step', time: i, session: 'Run',
+      values: {
+        outer: { args: [{ name: 'n', value: String(i % 3) }], locals: [] },
+        inner: { args: [], locals: [{ name: 'acc', value: String(i % 2) }] },
+      },
+    }));
+    const shared = indexRun(steps);
+    assert.equal(shared.length, steps.length);
+    // The shared index is the whole point of the scan being done once for both features.
+    assert.deepEqual(searchByValue('1', steps, { index: shared, labelOf: id => id }),
+      searchByValue('1', steps, { labelOf: id => id }));
+    assert.deepEqual(timelineModel(steps, { index: shared }), timelineModel(steps));
+    // mergedStep is what the timeline reads: the innermost frame shadows the outer one.
+    const frames = indexStep(steps[0])!;
+    assert.deepEqual(frames.map(f => f.nodeId), ['inner', 'outer']);
+    assert.deepEqual([...mergedStep(frames).keys()].sort(), ['acc', 'n']);
+  }],
+  ['search: the section appears only with a query, and clicking a row picks that step', () => {
+    const host = new PaneEl();
+    const picked: number[] = [];
+    const pane = new VariablePane(host as unknown as HTMLElement, new PaneEl() as unknown as HTMLElement, {
+      requestChildren: () => {},
+      historyStepPicked: index => picked.push(index),
+      labelOf: id => id,
+    });
+    const at = (value: string): HistoryStep => ({
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    pane.setHistory([at('7'), at('7'), at('[7, 8]'), at('7.0')]);
+
+    // No query: no section at all, so the pane is what it was before this feature.
+    pane.setSearch('', false);
+    assert.deepEqual(host.headings(), []);
+
+    pane.setSearch('7', false);
+    assert.deepEqual(host.headings(), ['Value: 7']);
+    const section = host.section('Value')!;
+    // The loop collapsed into one row; the list-valued step is not an exact or numeric match.
+    assert.deepEqual(paneRows(section), [['1-2', 'f.n', '7', 'exact'], ['4', 'f.n', '7.0', 'numeric']]);
+    const rows = section.children.filter(child => child.className.includes('vsearch-row'));
+    assert.equal(rows[0].tag, 'button'); // a real control, so it is keyboard reachable
+    assert.equal(rows[0].dataset.step, '0');
+    assert.equal(rows[1].dataset.tier, 'numeric');
+    assert.match(rows[0].attributes['aria-label'], /Go to steps 1-2 · f · n = 7 · arg · exact match/);
+    rows[1].clicks[0]();
+    rows[0].clicks[0]();
+    assert.deepEqual(picked, [3, 0]);
+
+    // The toggle adds the loose hit, and the precise ones stay above it.
+    pane.setSearch('7', true);
+    assert.deepEqual(paneRows(host.section('Value')!).map(r => r[3]), ['exact', 'numeric', 'contains']);
+
+    // A query nothing holds still explains itself rather than rendering an empty section.
+    pane.setSearch('zzz', false);
+    assert.equal(paneRows(host.section('Value')!).length, 0);
+    assert.match(host.section('Value')!.children[1].textContent, /was not held by any recorded variable/);
+
+    // Nothing recorded degrades like the history and the timeline.
+    pane.setHistory([]);
+    assert.match(host.section('Value')!.children[1].textContent, /No recorded session yet/);
+  }],
+  // --- end search by value ---
+
+
+
+
 ];
 
 async function main(): Promise<void> {

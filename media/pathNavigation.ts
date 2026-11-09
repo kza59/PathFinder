@@ -8,6 +8,8 @@ export interface NavigationState {
   path: DebugPath;
   debugPath: DebugPath;
   frame?: DebugPath;
+  /** per-step variable capture: the recorded step being shown, in history mode only. */
+  step?: HistoryStep;
   label: string;
   title: string;
   playing: boolean;
@@ -46,6 +48,7 @@ export class PathNavigation {
     return {
       mode: this.mode, path: [...path], debugPath: [...(this.mode === 'overview' ? [] : this.mode === 'history' ? path : this.live)],
       frame: this.frame ? [...this.frame] : undefined, label,
+      step: this.mode === 'history' ? this.steps[this.index] : undefined, // per-step variable capture
       title: this.mode === 'history' ? historyStepLabel(this.steps[this.index], this.index, this.steps.length, this.dropped)
         : this.catalog.limited ? 'More source paths may exist beyond the displayed set.' : 'Choose a path with the arrows',
       playing: this.playing,
@@ -94,6 +97,23 @@ export class PathNavigation {
     this.mode = mode;
     this.publish();
   }
+
+  // --- variable history ---
+  /**
+   * Select a recorded step by index: what clicking a value-history entry does.
+   *
+   * Deliberately the same two fields the arrows set, so the step label, breadcrumb, graph
+   * highlight, the inspector pane and the watch box all follow through the usual publish - a jump
+   * cannot drift out of sync with a step reached by arrowing.
+   */
+  public goTo(index: number): void {
+    if (!this.steps.length) return;
+    this.cancelPlayback();
+    this.index = Math.max(0, Math.min(index, this.steps.length - 1));
+    this.mode = 'history';
+    this.publish();
+  }
+  // --- end variable history ---
 
   public returnToDebug(): void {
     this.cancelPlayback();

@@ -10,9 +10,10 @@ import { recursionAnnouncement, recursionColor, recursionOutlines } from './recu
 import { recursionDepth, type RecursionDepth } from '../src/recursion';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
-import type { BreakpointCounts, CallArg, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, ReturnValues, VariableChildren, WebviewMessage } from '../src/types';
+import type { BreakpointCounts, CallArg, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HistoryStep, HotCounts, ReturnValues, VariableChildren, WebviewMessage } from '../src/types';
 import { MAX_CHILDREN, shortenValue } from '../src/callValues'; // return values + expand features (no vscode imports there)
 import { VariablePane } from './variablePane'; // variable inspector panel
+import type { WatchFrame } from './watchVariable'; // watch variable
 
 // --- return values feature ---
 const MAX_RETURN = 22; // characters of the value on the node; the hook already capped it at 120
@@ -753,13 +754,49 @@ export function initializeGraphWebview(): void {
   const paneResizer = document.getElementById('variable-resizer') as HTMLElement;
   const paneToggle = document.getElementById('toggle-variables') as HTMLButtonElement;
   const paneClose = document.getElementById('variable-pane-close') as HTMLButtonElement;
+  // --- variable history ---
+  // The finished session's steps, kept here because the pane needs the whole run, not just the
+  // step being scrubbed. Set from the sessionHistory message; empty while recording, by design.
+  let historySteps: HistoryStep[] = [];
+  /** Set once the navigation exists, so a timeline click can move the whole UI to that step. */
+  let goToStep: (index: number) => void = () => {};
+  // --- end variable history ---
+  // --- watch variable ---
+  const watchInput = document.getElementById('watch-input') as HTMLInputElement;
+  const watchList = document.getElementById('watch-names') as HTMLDataListElement;
+  const watchClear = document.getElementById('watch-clear') as HTMLButtonElement;
+  const watchStatus = document.getElementById('watch-status')!;
+  // --- end watch variable ---
   const variablePane = new VariablePane(paneBody, paneTitle, {
     requestChildren: ref => requestChildren(ref, MAX_CHILDREN),
+    // --- watch variable ---
+    // Rewritten only when the set actually changes: the watch re-renders on every path change, and
+    // replacing the options under an open dropdown would close it mid-pick.
+    watchNamesChanged: names => {
+      const current = Array.from(watchList.options, option => option.value);
+      if (current.length === names.length && current.every((name, index) => name === names[index])) {
+        return;
+      }
+      watchList.replaceChildren(...names.map(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        return option;
+      }));
+    },
+    // --- end watch variable ---
+    // --- variable history ---
+    historyStepPicked: index => goToStep(index),
+    labelOf: nodeId => {
+      const element = cy.getElementById(nodeId);
+      return element.length && element.isNode() ? element.data('label') as string : undefined;
+    },
+    // --- end variable history ---
   });
 
   /** Which node the pane describes, and whether a recorded step is being scrubbed. */
   let paneSelection: string | undefined;
   let paneHistoryStep = false;
+  let paneStep: HistoryStep | undefined; // per-step variable capture: the step being scrubbed
 
   const refreshPane = () => {
     if (paneHost.hidden) {
@@ -772,14 +809,133 @@ export function initializeGraphWebview(): void {
       returnValue: paneSelection === undefined ? undefined : renderer.returnValue(paneSelection),
       children: childrenByRef,
       historyStep: paneHistoryStep,
+      // --- per-step variable capture ---
+      // Only read while historyStep is set; undefined there means that step recorded nothing for
+      // this node (not Python, no graph open while recording, or the budget evicted it).
+      historyValues: paneSelection === undefined ? undefined : paneStep?.values?.[paneSelection],
+      // --- end per-step variable capture ---
     });
   };
 
-  const selectForPane = (id: string | undefined, fromHistory = false) => {
+  const selectForPane = (id: string | undefined, fromHistory = false, step?: HistoryStep) => {
     paneSelection = id;
     paneHistoryStep = fromHistory;
+    paneStep = fromHistory ? step : undefined; // per-step variable capture
     refreshPane();
   };
+
+  // --- watch variable ---
+  /** The highlighted path the watch resolves against: the live stack, or a scrubbed step's path. */
+  let watchPath: DebugPath = [];
+
+  /**
+   * One frame per path position, outer caller first.
+   *
+   * Values come from the recorded step while scrubbing and from the live capture otherwise. A
+   * CallValue and a StepValues both satisfy WatchSource, so neither is converted or copied. An id
+   * with no node in this graph is left label-less, which watchModel reads as "outside graph".
+   */
+  const watchFrames = (): WatchFrame[] => watchPath.map(id => {
+    const element = cy.getElementById(id);
+    const label = element.length && element.isNode() ? element.data('label') as string : undefined;
+    const values = paneStep ? paneStep.values?.[id] : renderer.callValue(id);
+    return {
+      id,
+      ...(label === undefined ? {} : { label }),
+      ...(values ? { values } : {}),
+    };
+  });
+
+  // --- search by value ---
+  /**
+   * The value-search bar, built ONCE here rather than rendered by the pane.
+   *
+   * render() calls replaceChildren() on the pane body, so a bar drawn as part of a render would be
+   * destroyed and rebuilt on every path change - losing focus and the caret mid-typing. Built once
+   * and inserted beside the body, it survives every re-render, exactly like the watch input.
+   * It is created in script because the pane's markup lives outside this feature's reach.
+   */
+  const searchBar = document.createElement('div');
+  searchBar.className = 'watch-bar vsearch-bar';
+  const searchLabel = searchBar.appendChild(document.createElement('label'));
+  searchLabel.htmlFor = 'value-input';
+  searchLabel.textContent = 'Value';
+  const searchInputValue = searchBar.appendChild(document.createElement('input'));
+  searchInputValue.id = 'value-input';
+  searchInputValue.type = 'text';
+  searchInputValue.placeholder = 'find a value';
+  searchInputValue.autocomplete = 'off';
+  searchInputValue.spellcheck = false;
+  searchInputValue.setAttribute('aria-describedby', 'value-status');
+  const containsLabel = searchBar.appendChild(document.createElement('label'));
+  containsLabel.className = 'vsearch-contains';
+  containsLabel.htmlFor = 'value-contains';
+  const containsBox = containsLabel.appendChild(document.createElement('input'));
+  containsBox.id = 'value-contains';
+  containsBox.type = 'checkbox';
+  containsLabel.appendChild(document.createTextNode('contains'));
+  containsLabel.title = 'Also match values that merely contain the text, such as 7 inside [7, 8]';
+  const searchClear = searchBar.appendChild(document.createElement('button'));
+  searchClear.type = 'button';
+  searchClear.hidden = true;
+  searchClear.textContent = '×';
+  searchClear.id = 'value-clear';
+  searchClear.setAttribute('aria-label', 'Clear the value search');
+  searchClear.title = 'Clear';
+  const valueStatus = document.createElement('span');
+  valueStatus.id = 'value-status';
+  valueStatus.setAttribute('role', 'status');
+  valueStatus.setAttribute('aria-live', 'polite');
+  valueStatus.textContent = 'No value searched';
+  paneHost.insertBefore(searchBar, paneBody);
+  document.querySelector('.sr-only')?.appendChild(valueStatus);
+
+  const refreshSearch = () => {
+    if (paneHost.hidden) {
+      return;
+    }
+    variablePane.setSearch(searchInputValue.value, containsBox.checked);
+    const searching = searchInputValue.value.trim();
+    searchClear.hidden = !searching;
+    valueStatus.textContent = searching
+      ? `Searching for ${searching}${containsBox.checked ? ', including containing values' : ''}`
+      : 'No value searched';
+  };
+  // Debounced: a long run that is past the index cache is re-scanned per keystroke, and this keeps
+  // typing smooth there. Short runs are instant either way.
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  searchInputValue.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(refreshSearch, 120);
+  });
+  containsBox.addEventListener('change', refreshSearch);
+  searchClear.addEventListener('click', () => {
+    clearTimeout(searchTimer);
+    searchInputValue.value = '';
+    refreshSearch();
+    searchInputValue.focus();
+  });
+  // --- end search by value ---
+
+  const refreshWatch = () => {
+    if (paneHost.hidden) {
+      return;
+    }
+    variablePane.setWatch(watchInput.value, watchFrames());
+    // variable history: the same name drives the time axis, so it re-renders with the space axis.
+    variablePane.setHistory(historySteps);
+    const watching = watchInput.value.trim();
+    watchClear.hidden = !watching;
+    watchStatus.textContent = watching ? `Watching ${watching}` : 'No variable watched';
+  };
+
+  watchInput.addEventListener('input', refreshWatch);
+  watchClear.addEventListener('click', () => {
+    watchInput.value = '';
+    refreshWatch();
+    watchInput.focus();
+  });
+  // --- end watch variable ---
 
   const PANE_MIN = 220;
   const PANE_MAX = 640;
@@ -808,6 +964,8 @@ export function initializeGraphWebview(): void {
     paneToggle.setAttribute('aria-pressed', String(show));
     if (show) {
       refreshPane();
+      refreshWatch(); // watch variable
+      refreshSearch(); // search by value
     }
     cy.resize(); // the graph just changed width
   };
@@ -988,7 +1146,9 @@ export function initializeGraphWebview(): void {
     selection.textContent = `${node.label} · ${fileName(node.file)}:${node.line}`;
     selection.title = node.file;
     // variable inspector panel: additive, so click-to-source below is untouched
-    selectForPane(node.id);
+    // per-step variable capture: while scrubbing, stay on that step - clicking a caller on the
+    // highlighted path is the only way to reach the outer frames the step recorded.
+    selectForPane(node.id, paneHistoryStep, paneStep);
     vscode.postMessage({ type: 'nodeClicked', id: node.id, file: node.file, line: node.line });
   });
 
@@ -1299,6 +1459,7 @@ export function initializeGraphWebview(): void {
         refreshTooltipVariables();
         // --- end expand complex variables feature ---
         refreshPane(); // variable inspector panel: new args/locals, and stale marking on resume
+        refreshWatch(); // watch variable: every value on the path just changed
         break;
       // --- expand complex variables feature ---
       case 'variableChildren':
@@ -1331,10 +1492,10 @@ export function initializeGraphWebview(): void {
   const navigation = new PathNavigation(state => {
     breadcrumbPath = state.path;
     // --- variable inspector panel ---
-    // Scrubbing a recorded step: session history stores only the path, never variables, so follow
-    // that step's innermost function but say so rather than showing the last pause's values.
+    // Scrubbing a recorded step: follow that step's innermost function and show what the step
+    // recorded there, never the live pause's values - they belong to a different moment.
     if (state.mode === 'history') {
-      selectForPane(state.path[state.path.length - 1], true);
+      selectForPane(state.path[state.path.length - 1], true, state.step); // per-step variable capture
     } else if (paneHistoryStep) {
       selectForPane(state.debugPath[state.debugPath.length - 1]); // back to the live pause
     }
@@ -1358,10 +1519,16 @@ export function initializeGraphWebview(): void {
     if (state.mode === 'source' || state.frame) renderer.previewPath(state.frame ?? state.path);
     renderBreadcrumb();
     syncCopyPathButton();
+    // --- watch variable ---
+    // Last, so paneStep (set by selectForPane above) already matches the path being watched.
+    watchPath = [...state.debugPath];
+    refreshWatch();
+    // --- end watch variable ---
   });
   const rebuildPaths = () => {
     navigation.setGraph(pathGraph, renderer.layout?.targetIds ?? new Set(), showNoise.checked);
   };
+  goToStep = index => navigation.goTo(index); // variable history
   pathPrevious.addEventListener('click', () => navigation.move(-1));
   pathNext.addEventListener('click', () => navigation.move(1));
   returnToDebug.addEventListener('click', () => navigation.returnToDebug());
@@ -1439,8 +1606,18 @@ export function initializeGraphWebview(): void {
     if (message.type === 'graph') {
       pathGraph = message.graph;
       rebuildPaths();
+      // variable history: node labels come from the graph, so re-render the timeline onto it.
+      refreshWatch();
       return;
     }
+    // --- variable history ---
+    // Only an ENDED session carries steps; while recording the message has just a count, which is
+    // why this is a history-only feature rather than a live one.
+    if (message.type === 'sessionHistory') {
+      historySteps = message.state === 'ended' ? message.steps : [];
+      refreshSearch(); // search by value: a finished run is what there is to search
+    }
+    // --- end variable history ---
     navigation.receive(message);
   });
   // --- end breadcrumb feature ---

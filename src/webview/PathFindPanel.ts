@@ -403,6 +403,15 @@ export class PathFindPanel implements vscode.Disposable {
       <h2 id="variable-pane-title">Variables</h2>
       <button id="variable-pane-close" type="button" aria-label="Hide the variables pane" title="Hide">&times;</button>
     </header>
+    <!-- --- watch variable --- -->
+    <div class="watch-bar">
+      <label for="watch-input">Watch</label>
+      <input id="watch-input" type="text" list="watch-names" placeholder="variable name"
+        aria-describedby="watch-status" autocomplete="off" spellcheck="false">
+      <datalist id="watch-names"></datalist>
+      <button id="watch-clear" type="button" aria-label="Stop watching" title="Stop watching" hidden>&times;</button>
+    </div>
+    <!-- --- end watch variable --- -->
     <div id="variable-pane-body" tabindex="0"></div>
   </aside>
   <!-- --- end variable inspector panel --- -->
@@ -412,6 +421,9 @@ export class PathFindPanel implements vscode.Disposable {
     <span id="runtime" role="status" aria-live="polite">No runtime path</span>
     <span id="recursion-banner" role="status" aria-live="polite" hidden></span>
     <span id="selection">Click a function to see its source location</span>
+    <!-- --- watch variable --- -->
+    <span id="watch-status" role="status" aria-live="polite">No variable watched</span>
+    <!-- --- end watch variable --- -->
   </div>
   <footer>
     <div class="path-row">

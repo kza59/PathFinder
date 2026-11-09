@@ -15,6 +15,7 @@ function fakeCapture(source: Record<string, string>, frameLocals: Record<number,
     { id: 'speak', label: 'Dog.speak', file: 'main.py', line: 11, endLine: 12 },
   ];
   let requests = 0;
+  const captured: CallValues[] = []; // per-step variable capture
   const deps: CallValuesDeps = {
     debounceMs: 0,
     request: async (command, args: any) => {
@@ -31,8 +32,9 @@ function fakeCapture(source: Record<string, string>, frameLocals: Record<number,
     resolveNode: (file, line) => nodes.find(n => n.file === file && n.line <= line && line <= n.endLine),
     readLines: file => source[file]?.split('\n'),
     publish: values => published.push(values),
+    onCapture: values => captured.push(values), // per-step variable capture
   };
-  return { capture: new CallValuesCapture(deps), published, requests: () => requests };
+  return { capture: new CallValuesCapture(deps), published, captured, requests: () => requests };
 }
 const MAIN = [
   'def main():',          // 1
@@ -243,6 +245,45 @@ const cases: [string, () => void | Promise<void>][] = [
     });
   }],
   // --- end local variables feature ---
+  // --- per-step variable capture ---
+  ['onCapture: the same values publish got, innermost node first, and never after a resume', async () => {
+    const { capture, published, captured, requests } = fakeCapture({ 'main.py': MAIN },
+      { 1: { n: '1' }, 2: { n: '3' }, 3: {} });
+    capture.paused();
+    // fact (innermost, line 8) under fact again under main: the stack as DAP sends it.
+    capture.framesChanged([frame(1, 8), frame(2, 8), frame(3, 2)]);
+    await settle();
+    assert.strictEqual(captured.length, 1);
+    assert.strictEqual(captured[0], published.at(-1)); // the very same object: nothing re-read
+    assert.deepStrictEqual(Object.keys(captured[0]), ['fact', 'main']); // innermost node first
+    assert.strictEqual(requests(), 4); // two frames resolved, two requests each: no extra traffic
+
+    // Resumed inside the debounce: the capture aborts on its generation guard, so no snapshot.
+    capture.paused();
+    capture.framesChanged([frame(1, 8)]);
+    capture.resumed();
+    await settle();
+    assert.strictEqual(captured.length, 1);
+  }],
+  ['onCapture is optional: a capture without it behaves exactly as before', async () => {
+    const published: CallValues[] = [];
+    const capture = new CallValuesCapture({
+      debounceMs: 0,
+      request: async (command: string) => command === 'scopes'
+        ? { scopes: [{ name: 'Locals', variablesReference: 7 }] }
+        : { variables: [{ name: 'n', value: '5' }] },
+      resolveNode: () => ({ id: 'fact', label: 'fact', file: 'main.py', line: 5 }),
+      readLines: () => MAIN.split('\n'),
+      publish: values => published.push(values),
+    } as CallValuesDeps);
+    capture.paused();
+    capture.framesChanged([frame(1, 8)]);
+    await settle();
+    assert.deepStrictEqual(published.at(-1), {
+      fact: { line: '(n=5)', args: [{ name: 'n', value: '5' }], atEntry: false },
+    });
+  }],
+  // --- end per-step variable capture ---
   // --- expand complex variables feature ---
   ['refs and types ride along on args and locals, and scalars carry neither', () => {
     const sig = parseSignature(['def f(a, b):', '    pass'], 1)!;
