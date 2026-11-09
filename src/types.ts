@@ -25,10 +25,16 @@ export type ReturnValues = Record<string, string>;
 // --- end return values feature ---
 
 // --- call values feature ---
-/** One parameter of a paused call, for the tooltip. */
+/** One parameter of a paused call, for the tooltip. Also used for an expanded variable's children. */
 export interface CallArg {
   name: string;   // as written in the signature: "a", "*args", "**kwargs"
   value?: string; // debugpy's repr at the pause (capped); absent when the name isn't in Locals
+  // --- expand complex variables feature ---
+  // Both omitted for a plain scalar, so a CallValue of scalars serialises as it always did.
+  ref?: number;   // DAP variablesReference: > 0 when the value has children that can be fetched.
+                  // Valid ONLY at the pause it came from; dead as soon as the program resumes.
+  type?: string;  // debugpy's type name ("list", "Dog"), for the tooltip
+  // --- end expand complex variables feature ---
 }
 /** Argument values of the innermost paused call of one graph node (Python only). */
 export interface CallValue {
@@ -48,6 +54,16 @@ export interface CallValue {
 /** Keyed by graph node id; only nodes on the stack at the last pause are present. */
 export type CallValues = Record<string, CallValue>;
 // --- end call values feature ---
+
+// --- expand complex variables feature ---
+/** The children of one expandable variable, as read at the pause its `ref` belongs to. */
+export interface VariableChildren {
+  ref: number;        // the variablesReference that was asked for
+  children: CallArg[];
+  more?: number;      // further children beyond the page that was fetched
+  stale?: boolean;    // the program resumed before the answer arrived: the ref is dead, show nothing
+}
+// --- end expand complex variables feature ---
 
 export type CallerExpansionPreview =
   | { state: 'loading' }
@@ -82,6 +98,7 @@ export type GraphMessage =
   | { type: 'hotCounts'; counts: HotCounts; returns?: ReturnValues } // hot-path counting + return values feature
   | { type: 'callValues'; values: CallValues } // call values feature
   | { type: 'breakpoints'; counts: BreakpointCounts } // breakpoint markers
+  | { type: 'variableChildren'; result: VariableChildren } // expand complex variables feature
   | SessionHistoryMessage; // session history
 
 export interface NodeClickedMessage {
@@ -109,4 +126,15 @@ export interface PreviewCallersMessage {
   id: string;
 }
 
-export type WebviewMessage = { type: 'ready' } | NodeClickedMessage | CopyPathMessage | ExpandCallersMessage | PreviewCallersMessage;
+// --- expand complex variables feature ---
+/** Webview -> extension: fetch one page of an expandable variable's children at the current pause. */
+export interface ExpandVariableMessage {
+  type: 'expandVariable';
+  ref: number;
+  start: number;
+  count: number;
+}
+// --- end expand complex variables feature ---
+
+export type WebviewMessage = { type: 'ready' } | NodeClickedMessage | CopyPathMessage | ExpandCallersMessage
+  | PreviewCallersMessage | ExpandVariableMessage; // expand complex variables feature

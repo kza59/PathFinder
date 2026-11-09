@@ -4,7 +4,8 @@ import { advanceAnimationFrames, pendingAnimationFrames } from './animationFrame
 import { flowLines, GraphRenderer, graphStyles, historyStepLabel } from './graph'; // historyStepLabel: session history; flowLines: argument vs return feature
 import { NodeLocals } from './nodeLocals'; // local variables feature
 import { heatColor, heatPalette, type HeatRange } from './heatmap';
-import type { GraphData, HotCounts } from '../src/types';
+import type { CallValue, GraphData, HotCounts, VariableChildren } from '../src/types';
+import { paneModel, VariablePane } from './variablePane'; // variable inspector panel
 import { largeSearchGraph } from '../src/test/mockdata';
 import { CASES } from '../src/test/cases';
 import { DEBUG_CASES } from '../src/test/debugCases';
@@ -1177,6 +1178,150 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.deepEqual(flowLines(undefined, undefined, false), []);
   }],
   // --- end argument vs return feature ---
+  // --- variable inspector panel ---
+  ['pane: three sections, with the caveats and empty states the capture implies', () => {
+    const model = paneModel({
+      label: 'add',
+      value: {
+        line: '(a=3)', atEntry: false, args: [{ name: 'a', value: '3', type: 'int' }],
+        locals: [{ name: 'total', value: '7', type: 'int' }], localsCount: 4,
+      },
+      returnValue: '7',
+      expanded: new Set(), children: new Map(),
+    });
+    assert.deepEqual(model.sections.map(s => s.id), ['args', 'locals', 'return']);
+    assert.equal(model.stale, false);
+    assert.match(model.sections[0].note!, /values at the pause/i);
+    assert.equal(model.sections[1].note, '3 more not shown.'); // localsCount 4, one listed
+    assert.deepEqual(model.sections[2].rows.map(r => r.value), ['7']);
+    assert.equal(model.sections[2].rows[0].ref, undefined); // the hook keeps no object to expand
+    // atEntry switches the caveat, and the empty states explain themselves.
+    const entry = paneModel({
+      label: 'add', value: { line: '()', atEntry: true, args: [] },
+      expanded: new Set(), children: new Map(),
+    });
+    assert.match(entry.sections[0].note!, /as passed/i);
+    assert.equal(entry.sections[0].empty, 'No parameters.');
+    assert.ok(entry.sections[2].empty!.includes('3.12'));
+  }],
+  ['pane: expanding a ref nests its children, pages with "+N more", and shows loading', () => {
+    const value: CallValue = {
+      line: '()', atEntry: false, args: [{ name: 'items', value: '[1, 2]', type: 'list', ref: 11 }],
+    };
+    const base = { label: 'f', value, children: new Map(), expanded: new Set<string>() };
+    // Collapsed: just the one row, offering a disclosure.
+    assert.deepEqual(paneModel(base).sections[0].rows.map(r => [r.name, r.depth, r.expanded]),
+      [['items', 0, false]]);
+    // Expanded with nothing fetched yet: the row reports itself as loading.
+    const waiting = paneModel({ ...base, expanded: new Set(['args/items']) }).sections[0].rows;
+    assert.equal(waiting.length, 1);
+    assert.deepEqual([waiting[0].expanded, waiting[0].loading], [true, true]);
+    // Children arrive, including a nested one that is itself expanded.
+    const children = new Map<number, VariableChildren>([
+      [11, { ref: 11, children: [{ name: '0', value: '1' }, { name: '1', value: '[9]', ref: 12 }], more: 7 }],
+      [12, { ref: 12, children: [{ name: '0', value: '9' }] }],
+    ]);
+    const rows = paneModel({
+      ...base, children, expanded: new Set(['args/items', 'args/items/1']),
+    }).sections[0].rows;
+    assert.deepEqual(rows.map(r => [r.key, r.depth, r.note ?? false]), [
+      ['args/items', 0, false],
+      ['args/items/0', 1, false],
+      ['args/items/1', 1, false],
+      ['args/items/1/0', 2, false],
+      ['args/items/+more', 1, true],
+    ]);
+    assert.equal(rows.find(r => r.note)!.name, '+7 more');
+  }],
+  ['pane: stale keeps the values but takes away every disclosure', () => {
+    const rows = paneModel({
+      label: 'f',
+      value: { line: '()', atEntry: false, stale: true, args: [{ name: 'items', value: '[1, 2]', ref: 11 }] },
+      expanded: new Set(['args/items']),
+      children: new Map([[11, { ref: 11, children: [{ name: '0', value: '1' }] }]]),
+    }).sections[0].rows;
+    // The reference died with the pause, so it is not offered - and not followed either.
+    assert.deepEqual(rows.map(r => r.name), ['items']);
+    assert.equal(rows[0].value, '[1, 2]'); // the last known value is still worth showing
+    assert.equal(rows[0].ref, undefined);
+    assert.equal(rows[0].expanded, false);
+    assert.equal(paneModel({
+      label: 'f', value: { line: '()', atEntry: false, stale: true, args: [] },
+      expanded: new Set(), children: new Map(),
+    }).stale, true);
+  }],
+  ['pane: a stale answer is dropped, not rendered as children', () => {
+    const rows = paneModel({
+      label: 'f',
+      value: { line: '()', atEntry: false, args: [{ name: 'items', value: '[1, 2]', ref: 11 }] },
+      expanded: new Set(['args/items']),
+      children: new Map([[11, { ref: 11, children: [], stale: true }]]),
+    }).sections[0].rows;
+    assert.deepEqual(rows.map(r => r.name), ['items']);
+    // Answered, so never "loading" forever (an adapter error arrives this way): the value stays.
+    assert.equal(rows[0].loading, false);
+    assert.equal(rows[0].value, '[1, 2]');
+  }],
+  ['pane: an empty container finishes loading and says it is empty', () => {
+    const rows = paneModel({
+      label: 'f',
+      value: { line: '()', atEntry: false, args: [{ name: 'items', value: '[]', ref: 11 }] },
+      expanded: new Set(['args/items']),
+      children: new Map([[11, { ref: 11, children: [] }]]),
+    }).sections[0].rows;
+    assert.equal(rows[0].loading, false);
+    assert.equal(rows[0].value, '[]');
+    assert.deepEqual(rows.slice(1).map(r => [r.name, r.note]), [['(empty)', true]]);
+  }],
+  ['pane: a row left open across a pause asks for its children under the new reference', () => {
+    class FakeElement {
+      style = {}; dataset = {}; classList = { toggle() { /* unused */ } }; ownerDocument = fakeDocument;
+      className = ''; textContent = ''; children: FakeElement[] = [];
+      handlers: Record<string, () => void> = {};
+      appendChild(child: FakeElement) { this.children.push(child); return child; }
+      replaceChildren() { this.children = []; }
+      setAttribute() { /* unused */ }
+      addEventListener(type: string, handler: () => void) { this.handlers[type] = handler; }
+    }
+    const fakeDocument = { createElement: () => new FakeElement() };
+    const find = (element: FakeElement, className: string): FakeElement | undefined =>
+      element.className === className ? element
+        : element.children.map(child => find(child, className)).find(Boolean);
+    const host = new FakeElement();
+    const requested: number[] = [];
+    const pane = new VariablePane(host as unknown as HTMLElement, new FakeElement() as unknown as HTMLElement,
+      { requestChildren: ref => requested.push(ref) });
+    const at = (ref: number) => ({
+      label: 'f',
+      value: { line: '()', atEntry: false, args: [{ name: 'items', value: '[1]', ref }] },
+      children: new Map<number, VariableChildren>(),
+    });
+    pane.update(at(11));
+    assert.deepEqual(requested, []); // collapsed: nothing to fetch
+    find(host, 'pane-twisty')!.handlers.click();
+    assert.deepEqual(requested, [11]);
+    pane.update(at(27)); // stepped: same row still open, a new reference, an emptied cache
+    assert.deepEqual(requested.at(-1), 27);
+  }],
+  ['pane: messages replace the sections when there is nothing honest to show', () => {
+    assert.match(paneModel({ expanded: new Set(), children: new Map() }).message!, /Click a function/);
+    // History records only the path, so a scrubbed step has no variables - say so, do not guess.
+    const scrubbed = paneModel({
+      label: 'add', historyStep: true,
+      value: { line: '(a=3)', atEntry: false, args: [{ name: 'a', value: '3' }] },
+      expanded: new Set(), children: new Map(),
+    });
+    assert.equal(scrubbed.message, 'No variables recorded for this step.');
+    assert.deepEqual(scrubbed.sections, []);
+    // Selected, but never paused inside it and nothing returned.
+    assert.match(paneModel({ label: 'add', expanded: new Set(), children: new Map() }).message!,
+      /Pause the debugger inside this function/);
+    // A return value alone is enough to be worth a pane.
+    const returnOnly = paneModel({ label: 'add', returnValue: '7', expanded: new Set(), children: new Map() });
+    assert.equal(returnOnly.message, undefined);
+    assert.deepEqual(returnOnly.sections.map(s => s.id), ['return']);
+  }],
+  // --- end variable inspector panel ---
 ];
 
 async function main(): Promise<void> {

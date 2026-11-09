@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { expandCallers } from '../graphBuilder';
-import type { BreakpointCounts, CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage, ReturnValues, SessionHistoryMessage } from '../types';
+import type { BreakpointCounts, CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage, ReturnValues, SessionHistoryMessage, VariableChildren } from '../types';
 import { callerExpansionPreview } from './callerPreview';
 
 export class PathFindPanel implements vscode.Disposable {
@@ -102,6 +102,12 @@ export class PathFindPanel implements vscode.Disposable {
           });
         } else if (message.type === 'expandCallers' && 'id' in message && typeof message.id === 'string') {
           void this.expandNodeCallers(message.id);
+        // --- expand complex variables feature ---
+        } else if (message.type === 'expandVariable' && 'ref' in message && typeof message.ref === 'number'
+          && 'start' in message && typeof message.start === 'number'
+          && 'count' in message && typeof message.count === 'number') {
+          void this.sendVariableChildren(message.ref, message.start, message.count);
+        // --- end expand complex variables feature ---
         } else if (message.type === 'previewCallers' && 'id' in message && typeof message.id === 'string') {
           if (this.graph && this.callerPreviews.get(message.id)?.state === 'error') {
             void this.previewNodeCallers(message.id, this.graph, this.callerExpansions);
@@ -208,6 +214,21 @@ export class PathFindPanel implements vscode.Disposable {
     this.send({ type: 'hotCounts', counts: this.hotCounts, returns: this.returnValues });
   }
   // --- end hot-path counting ---
+
+  // --- expand complex variables feature ---
+  /**
+   * Set by the debug tracker for a Python session that has a call-values capture, cleared when that
+   * session ends. Only valid while the program is paused; the capture itself enforces that.
+   */
+  public static variableExpander: ((ref: number, start: number, count: number) => Promise<VariableChildren>) | undefined;
+
+  private async sendVariableChildren(ref: number, start: number, count: number): Promise<void> {
+    const expand = PathFindPanel.variableExpander;
+    // No session, no capture, or it resumed: answer anyway, so the webview can stop waiting.
+    const result = expand ? await expand(ref, start, count) : { ref, children: [], stale: true };
+    this.send({ type: 'variableChildren', result });
+  }
+  // --- end expand complex variables feature ---
 
   // --- call values feature ---
   public setCallValues(values: CallValues): void {
@@ -324,12 +345,19 @@ export class PathFindPanel implements vscode.Disposable {
       <button id="where-to-break" type="button" title="Find diamond-marked chokepoints for breakpoint suggestions"><span class="chokepoint-icon" aria-hidden="true">&#9671;</span> Suggest Breakpoint</button>
       <label class="noise-toggle"><input id="show-noise" type="checkbox"> Show Noise Functions <span id="noise-count" class="control-count" hidden></span></label>
       <button id="clear-highlights" type="button" title="Clear path and search highlights without changing the layout" disabled>Clear Highlights</button>
+      <!-- --- variable inspector panel --- -->
+      <button id="toggle-variables" type="button" aria-pressed="false" title="Show the selected function's arguments, locals and return value">Variables</button>
+      <!-- --- end variable inspector panel --- -->
       <select id="layout-mode" aria-label="Graph layout">
         <option value="trace">Trace</option>
         <option value="explore">Explore</option>
       </select>
     </div>
   </header>
+  <!-- --- variable inspector panel --- #workspace is a flex row; the pane is a SIBLING of <main>,
+       never a child, so #graph keeps exactly filling <main> and every overlay positioned in
+       <main>'s coordinate space (pills, locals band, truncation, outlines, tooltip) stays aligned. -->
+  <div id="workspace">
   <main>
     <div id="graph" role="img" aria-label="Directed function call graph"></div>
     <div id="node-pills" hidden></div>
@@ -368,6 +396,17 @@ export class PathFindPanel implements vscode.Disposable {
     </details>
     <!-- --- end legend feature --- -->
   </main>
+  <!-- --- variable inspector panel --- -->
+  <div id="variable-resizer" role="separator" aria-orientation="vertical" aria-label="Resize the variables pane" hidden></div>
+  <aside id="variable-pane" aria-labelledby="variable-pane-title" hidden>
+    <header class="pane-header">
+      <h2 id="variable-pane-title">Variables</h2>
+      <button id="variable-pane-close" type="button" aria-label="Hide the variables pane" title="Hide">&times;</button>
+    </header>
+    <div id="variable-pane-body" tabindex="0"></div>
+  </aside>
+  <!-- --- end variable inspector panel --- -->
+  </div>
   <div class="sr-only">
     <span id="search-status" role="status" aria-live="polite">Enter a function name</span>
     <span id="runtime" role="status" aria-live="polite">No runtime path</span>

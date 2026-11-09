@@ -62,6 +62,11 @@ export function registerDebugTracker(context: vscode.ExtensionContext): void {
         highlightedSessionId = undefined;
         PathFindPanel.currentPanel?.clearDebugPath();
       }
+      // --- expand complex variables feature --- no session, nothing left to expand
+      if (!trackedSessions.size) {
+        PathFindPanel.variableExpander = undefined;
+      }
+      // --- end expand complex variables feature ---
     }),
   );
 }
@@ -72,7 +77,7 @@ function createCallValuesCapture(session: vscode.DebugSession): CallValuesCaptur
   if (!CALL_VALUES_DEBUG_TYPES.includes(session.type)) {
     return undefined;
   }
-  return new CallValuesCapture({
+  const capture = new CallValuesCapture({
     request: (command, args) => session.customRequest(command, args),
     resolveNode: (file, line) => {
       const graph = PathFindPanel.currentPanel?.currentGraph;
@@ -87,6 +92,12 @@ function createCallValuesCapture(session: vscode.DebugSession): CallValuesCaptur
     },
     publish: values => PathFindPanel.currentPanel?.setCallValues(values),
   });
+  // --- expand complex variables feature ---
+  // Lets the webview ask this capture for a variable's children. Last Python session wins; it is
+  // cleared when that session ends, so a dead session can never answer.
+  PathFindPanel.variableExpander = (ref, start, count) => capture.expand(ref, start, count);
+  // --- end expand complex variables feature ---
+  return capture;
 }
 // --- end call values feature ---
 
