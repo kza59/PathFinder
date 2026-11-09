@@ -81,6 +81,13 @@ def _install(out_dir, roots_env):
         return filename != this_file and any(filename.startswith(root) for root in roots)
 
     def on_start(code, offset):
+        # --- return values feature ---
+        # Work this file does on behalf of the return-value capture must never be counted. Return
+        # None and NOT DISABLE: DISABLE is permanent for this code object, which would silently
+        # stop counting a real user function.
+        if getattr(local, 'busy', False):
+            return
+        # --- end return values feature ---
         # PY_START fires once per real call (not on generator/coroutine resumes).
         key = id(code)
         if key not in codes:
@@ -94,6 +101,75 @@ def _install(out_dir, roots_env):
             per_thread.append(counts)
         counts[key] = counts.get(key, 0) + 1
 
+    # --- return values feature ---
+    # The latest value each function returned, formatted HERE (the object itself is never stored,
+    # so nothing is kept alive and nothing can mutate underneath us).
+    #
+    # Formatting is type-based and never runs user code: exact builtin types are rendered with the
+    # builtin repr, short builtin containers element-wise through this same function, and anything
+    # else becomes "<ClassName>". A str/int subclass is NOT an exact match, so it takes the
+    # "<ClassName>" path too - deliberately, since its __repr__ would be user code.
+    #
+    # Every return is captured, with no time-based throttle: the value worth showing is the LAST
+    # one (the outermost return of a recursion, the final iteration of a loop), and a throttle
+    # keeps the first of a burst instead. What keeps this cheap is that fmt's work is bounded: long
+    # strings are cut before repr, and containers stop at _RET_ITEMS elements and _RET_DEPTH levels.
+    _RET_MAX = 120         # characters stored per value
+    _RET_ITEMS = 6         # elements rendered per container
+    _RET_DEPTH = 2         # nesting levels rendered element-wise
+    _SCALARS = frozenset((type(None), bool, int, float, complex, str, bytes))
+
+    rets = {}      # id(code) -> (seq, text)
+    ret_seq = [0]  # a lost increment here only perturbs tie-breaking, so no lock is needed
+
+    def clip(text):
+        return text if len(text) <= _RET_MAX else text[:_RET_MAX - 1] + '…'
+
+    def fmt(value, depth=0):
+        kind = type(value)
+        if kind in _SCALARS:
+            if (kind is str or kind is bytes) and len(value) > _RET_MAX:
+                value = value[:_RET_MAX]  # so a huge string costs no more than a short one
+            return clip(repr(value))  # builtin types only: a C-level repr, no Python frames
+        if depth < _RET_DEPTH and kind in (list, tuple, set, frozenset, dict):
+            items = []
+            pairs = value.items() if kind is dict else value
+            for item in pairs:
+                if len(items) >= _RET_ITEMS:
+                    items.append('…')
+                    break
+                items.append('%s: %s' % (fmt(item[0], depth + 1), fmt(item[1], depth + 1))
+                             if kind is dict else fmt(item, depth + 1))
+            body = ', '.join(items)
+            if kind is list:
+                return clip('[%s]' % body)
+            if kind is tuple:
+                return clip('(%s,)' % body if len(items) == 1 else '(%s)' % body)
+            if not items and kind is not dict:
+                return 'set()' if kind is set else 'frozenset()'
+            return clip('{%s}' % body)
+        return '<%s>' % kind.__name__
+
+    def on_return(code, offset, retval):
+        try:
+            key = id(code)
+            if key not in codes:
+                # on_start's DISABLE is per (code, event), so PY_RETURN still fires for code it
+                # rejected: filter again here, and DISABLE this event for it too.
+                if not wanted(code):
+                    return DISABLE
+                codes[key] = code
+            local.busy = True
+            try:
+                text = fmt(retval)
+            finally:
+                local.busy = False
+            ret_seq[0] += 1
+            rets[key] = (ret_seq[0], text)
+        except Exception:
+            pass  # a failure here must never reach the user's program
+    # --- end return values feature ---
+
     def snapshot():
         totals = {}
         for counts in list(per_thread):
@@ -103,23 +179,34 @@ def _install(out_dir, roots_env):
         for key, n in totals.items():
             code = codes[key]
             lines = [line for _, _, line in code.co_lines() if line is not None]
-            functions.append({
+            entry = {
                 'file': os.path.abspath(code.co_filename),
                 'qualname': code.co_qualname,
                 'line': code.co_firstlineno,  # first decorator line for decorated functions
                 'endLine': max(lines, default=code.co_firstlineno),
                 'count': n,
-            })
+            }
+            # --- return values feature ---
+            ret = rets.get(key)
+            if ret is not None:
+                entry['retSeq'] = ret[0]
+                entry['ret'] = ret[1]
+            # --- end return values feature ---
+            functions.append(entry)
         return totals, functions
 
     last = [None]
 
     def dump():
         totals, functions = snapshot()
-        if totals == last[0]:
+        # --- return values feature --- the last call of a run bumps its count and only then
+        # returns, so a value captured after that dump would never ship if counts alone decided.
+        stamp = (totals, ret_seq[0])
+        # --- end return values feature ---
+        if stamp == last[0]:
             return
         write({'pid': pid, 'functions': functions})
-        last[0] = totals
+        last[0] = stamp
 
     def dump_loop():
         while True:
@@ -138,7 +225,11 @@ def _install(out_dir, roots_env):
                 time.sleep(0.05)
 
     monitoring.register_callback(tool, monitoring.events.PY_START, on_start)
-    monitoring.set_events(tool, monitoring.events.PY_START)
+    # --- return values feature --- PY_RETURN does not fire when a call raises (that is PY_UNWIND),
+    # so a function that only ever throws simply has no return value to show.
+    monitoring.register_callback(tool, monitoring.events.PY_RETURN, on_return)
+    monitoring.set_events(tool, monitoring.events.PY_START | monitoring.events.PY_RETURN)
+    # --- end return values feature ---
 
     thread = threading.Thread(target=dump_loop, name='pathfinder-hot-dump', daemon=True)
     thread.pydev_do_not_trace = True      # tell debugpy not to trace or suspend this thread

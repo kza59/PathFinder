@@ -10,7 +10,12 @@ import { recursionAnnouncement, recursionColor, recursionOutlines } from './recu
 import { recursionDepth, type RecursionDepth } from '../src/recursion';
 import { fileName } from '../src/webview/filePath';
 import { edgeRoute, targetLayout, NODE_HEIGHT, NODE_WIDTH, type TargetLayout } from '../src/webview/targetLayout';
-import type { BreakpointCounts, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, WebviewMessage } from '../src/types';
+import type { BreakpointCounts, CallValue, CallValues, DebugPath, GraphData, GraphMessage, GraphNode, HotCounts, ReturnValues, WebviewMessage } from '../src/types';
+import { shortenValue } from '../src/callValues'; // return values feature (no vscode imports there)
+
+// --- return values feature ---
+const MAX_RETURN = 22; // characters of the value on the node; the hook already capped it at 120
+// --- end return values feature ---
 
 declare function acquireVsCodeApi(): { postMessage(message: WebviewMessage): void };
 
@@ -32,9 +37,34 @@ export const layoutOptions = {
   animate: false,
 };
 
+// --- argument vs return feature ---
+// Arguments and the return value are captured by two unrelated mechanisms (a DAP pause and the
+// sys.monitoring hook), so they only describe one call when sameCall says so (see applyCallPairing).
+// Joined on one line they read as "this went in, that came out"; the cap keeps the pair inside
+// roughly one rendered line of the node's 160px text box at 12px, so the arrow never ends up
+// stranded at the start of a wrap.
+const FLOW_JOIN_MAX = 26;
+
+/**
+ * "(a=3, b=4)" and "→ 7" as one line when they belong to one call and fit, else as two lines. From
+ * different calls they are never joined, and "last" says the value came from an earlier return.
+ */
+export function flowLines(args: string | undefined, ret: string | undefined, sameCall: boolean): string[] {
+  if (args && ret && !sameCall) {
+    return [args, `last ${ret}`];
+  }
+  if (args && ret && `${args} ${ret}`.length <= FLOW_JOIN_MAX) {
+    return [`${args} ${ret}`];
+  }
+  return [...(args ? [args] : []), ...(ret ? [ret] : [])];
+}
+// --- end argument vs return feature ---
+
 const nodeLabel = (node: NodeSingular): string => [
   `${node.hasClass('chokepoint') ? '◇ ' : ''}${node.data('label')}`,
-  ...(node.data('callArgs') ? [node.data('callArgs') as string] : []), // call values feature
+  // call values feature (args) + return values feature (ret), paired by the argument vs return feature
+  ...flowLines(node.data('callArgs') as string | undefined, node.data('callReturn') as string | undefined,
+    node.data('callSameCall') === true),
 ].join('\n');
 
 export function graphStyles(foreground = '#d4d4d4', background = '#252526'): StylesheetJson {
@@ -66,6 +96,12 @@ export function graphStyles(foreground = '#d4d4d4', background = '#252526'): Sty
       style: { 'font-size': '12px', 'text-overflow-wrap': 'anywhere' },
     },
     // --- end call values feature ---
+    // --- return values feature --- the return line needs the same smaller type as the args line
+    {
+      selector: 'node.has-return',
+      style: { 'font-size': '12px', 'text-overflow-wrap': 'anywhere' },
+    },
+    // --- end return values feature ---
     // --- breakpoint markers --- a dot in the top-left corner. Drawn as a background image, so it composes
     // with every other state (path/current/target use the border, hover/selection the underlay, heat the fill).
     {
@@ -248,7 +284,21 @@ export class GraphRenderer {
         node.removeData('callArgs').removeClass('has-args');
       }
     }));
+    this.applyCallPairing(); // argument vs return feature
   }
+
+  // --- argument vs return feature ---
+  /**
+   * The args and the return value can only be claimed to be one call when that call has finished
+   * (the args are stale, so a live pause isn't showing a call whose return doesn't exist yet) and
+   * it is the only call the function has made. Anything else risks pairing different calls.
+   */
+  private applyCallPairing(): void {
+    this.cy.batch(() => this.cy.nodes().forEach(node => {
+      node.data('callSameCall', this.callValue(node.id())?.stale === true && this.getHotCount(node.id()) === 1);
+    }));
+  }
+  // --- end argument vs return feature ---
   // --- end call values feature ---
 
   // --- local variables feature ---
@@ -431,6 +481,7 @@ export class GraphRenderer {
     this.applyCallValues(); // call values feature
     this.applyCallLocals(); // local variables feature
     this.applyBreakpoints(); // breakpoint markers
+    this.applyReturnValues(); // return values feature
     this.highlightPath(this.path);
     this.applyHotCounts();
     this.graphRendered(this.visibleNodeCount);
@@ -445,6 +496,33 @@ export class GraphRenderer {
   public getHotCount(id: string): number | undefined {
     return this.hotCounts.get(id);
   }
+
+  // --- return values feature ---
+  private returnValues: ReturnValues = {};
+
+  /** The full captured value (the node line is shortened); undefined until a call has returned. */
+  public returnValue(id: string): string | undefined {
+    return Object.prototype.hasOwnProperty.call(this.returnValues, id) ? this.returnValues[id] : undefined;
+  }
+
+  /** Full snapshot, like the counts it arrives with: a node absent from it loses its line. */
+  public setReturnValues(values: ReturnValues): void {
+    this.returnValues = { ...values };
+    this.applyReturnValues();
+  }
+
+  private applyReturnValues(): void {
+    this.cy.batch(() => this.cy.nodes().forEach(node => {
+      const value = this.returnValue(node.id());
+      if (value === undefined) {
+        node.removeData('callReturn').removeClass('has-return');
+      } else {
+        node.data('callReturn', `→ ${shortenValue(value, MAX_RETURN)}`).addClass('has-return');
+      }
+    }));
+    this.applyCallPairing(); // argument vs return feature
+  }
+  // --- end return values feature ---
 
   private applyHotCounts(): void {
     const counted: { node: NodeSingular; count: number }[] = [];
@@ -1048,6 +1126,7 @@ export function initializeGraphWebview(): void {
         break;
       case 'hotCounts':
         renderer.setHotCounts(message.counts);
+        renderer.setReturnValues(message.returns ?? {}); // return values feature
         break;
       // --- call values feature ---
       case 'callValues':

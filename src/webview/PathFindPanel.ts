@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { expandCallers } from '../graphBuilder';
-import type { BreakpointCounts, CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage, SessionHistoryMessage } from '../types';
+import type { BreakpointCounts, CallerExpansionPreview, CallValues, DebugPath, GraphData, GraphMessage, HotCounts, NodeClickedMessage, ReturnValues, SessionHistoryMessage } from '../types';
 import { callerExpansionPreview } from './callerPreview';
 
 export class PathFindPanel implements vscode.Disposable {
@@ -18,6 +18,7 @@ export class PathFindPanel implements vscode.Disposable {
   /** Fires after any panel renders a new graph, so hot counts can be re-mapped onto its nodes. */
   public static readonly onDidRenderGraph = PathFindPanel.graphRendered.event;
   private hotCounts: HotCounts = {};
+  private returnValues: ReturnValues = {}; // return values feature
   // --- end hot-path counting ---
   private callValues: CallValues = {}; // call values feature
   private breakpoints: BreakpointCounts = {}; // breakpoint markers
@@ -71,7 +72,7 @@ export class PathFindPanel implements vscode.Disposable {
           this.sendDebugState();
           // --- hot-path counting ---
           if (Object.keys(this.hotCounts).length) {
-            this.send({ type: 'hotCounts', counts: this.hotCounts });
+            this.send({ type: 'hotCounts', counts: this.hotCounts, returns: this.returnValues });
           }
           // --- end hot-path counting ---
           // --- call values feature ---
@@ -201,9 +202,10 @@ export class PathFindPanel implements vscode.Disposable {
   }
 
   // --- hot-path counting ---
-  public setHotCounts(counts: HotCounts): void {
+  public setHotCounts(counts: HotCounts, returns: ReturnValues = {}): void {
     this.hotCounts = { ...counts };
-    this.send({ type: 'hotCounts', counts: this.hotCounts });
+    this.returnValues = { ...returns }; // return values feature
+    this.send({ type: 'hotCounts', counts: this.hotCounts, returns: this.returnValues });
   }
   // --- end hot-path counting ---
 
