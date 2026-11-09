@@ -449,7 +449,11 @@ export class CallValuesCapture {
             value: variable.value.length > MAX_FULL ? `${variable.value.slice(0, MAX_FULL - 1)}…` : variable.value,
             ...varMeta(variable),
           }));
-          return { ref, children, ...(all.length > page ? { more: all.length - page } : {}) };
+          // debugpy ignores start/count and caps large lists at 100 rows, so for a container its
+          // "len()" row is the real size. Objects have none, and fall back to the rows that came.
+          const total = Number((variables ?? []).find(variable => variable.name === 'len()')?.value);
+          const more = Number.isInteger(total) ? total - children.length : all.length - page;
+          return { ref, children, ...(more > 0 ? { more } : {}) };
         } catch {
           return undefined; // the frame is gone, or the adapter refused the reference
         }

@@ -335,6 +335,24 @@ const cases: [string, () => void | Promise<void>][] = [
     capture.paused();
     assert.deepStrictEqual(await capture.expand(11), { ref: 11, children: [], stale: true });
   }],
+  ['expand: "+N more" counts the real size when debugpy reports one', async () => {
+    const capture = new CallValuesCapture({
+      debounceMs: 0,
+      // What debugpy sends for a 200-item list: 100 rows, a "more" group, and len().
+      request: async () => ({ variables: [
+        ...Array.from({ length: 100 }, (_, i) => ({ name: String(i), value: String(i) })),
+        { name: 'more', value: '', variablesReference: 5 },
+        { name: 'len()', value: '200' },
+      ] }),
+      resolveNode: () => undefined,
+      readLines: () => undefined,
+      publish: () => undefined,
+    } as unknown as CallValuesDeps);
+    capture.paused();
+    const page = await capture.expand(11, 0, 50);
+    assert.strictEqual(page.children.length, 50);
+    assert.strictEqual(page.more, 150);
+  }],
   // --- end expand complex variables feature ---
 ];
 

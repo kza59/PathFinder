@@ -58,7 +58,10 @@ function childRows(
 ): PaneRow[] {
   const answer = input.children.get(ref);
   if (!answer || answer.stale) {
-    return []; // not here yet, or the pause it belonged to is gone; the parent shows as loading
+    return []; // not here yet, or the reference could not be answered
+  }
+  if (!answer.children.length && !answer.more) {
+    return [{ key: `${parentKey}/+empty`, name: '(empty)', value: '', depth, expanded: false, loading: false, note: true }];
   }
   const rows: PaneRow[] = [];
   for (const child of answer.children) {
@@ -87,7 +90,7 @@ function variableRows(key: string, arg: CallArg, depth: number, input: PaneInput
     ...(ref === undefined ? {} : { ref }),
     depth,
     expanded,
-    loading: expanded && children.length === 0,
+    loading: expanded && !input.children.has(ref), // no answer yet; an answer with no rows is not loading
   };
   return [row, ...children];
 }
@@ -170,6 +173,13 @@ export class VariablePane {
 
   private render(): void {
     const model = paneModel(this.input);
+    // Every row waiting on an answer asks for it: a row left open across a pause has a new ref and
+    // an emptied cache. The host sends each ref once per pause, so re-rendering costs nothing.
+    for (const row of model.sections.flatMap(section => section.rows)) {
+      if (row.loading && row.ref !== undefined) {
+        this.deps.requestChildren(row.ref);
+      }
+    }
     this.title.textContent = this.input.label ?? 'Variables';
     this.host.classList.toggle('stale', model.stale);
     this.host.replaceChildren();
@@ -252,10 +262,7 @@ export class VariablePane {
     if (this.expanded.has(row.key)) {
       this.expanded.delete(row.key);
     } else {
-      this.expanded.add(row.key);
-      if (!this.input.children.has(row.ref)) {
-        this.deps.requestChildren(row.ref); // the answer re-renders through update()
-      }
+      this.expanded.add(row.key); // render() requests the children if they are not here yet
     }
     this.render();
   }

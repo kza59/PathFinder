@@ -5,7 +5,7 @@ import { flowLines, GraphRenderer, graphStyles, historyStepLabel } from './graph
 import { NodeLocals } from './nodeLocals'; // local variables feature
 import { heatColor, heatPalette, type HeatRange } from './heatmap';
 import type { CallValue, GraphData, HotCounts, VariableChildren } from '../src/types';
-import { paneModel } from './variablePane'; // variable inspector panel
+import { paneModel, VariablePane } from './variablePane'; // variable inspector panel
 import { largeSearchGraph } from '../src/test/mockdata';
 import { CASES } from '../src/test/cases';
 import { DEBUG_CASES } from '../src/test/debugCases';
@@ -1248,7 +1248,50 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
       children: new Map([[11, { ref: 11, children: [], stale: true }]]),
     }).sections[0].rows;
     assert.deepEqual(rows.map(r => r.name), ['items']);
-    assert.equal(rows[0].loading, true); // reported as pending rather than as "no children"
+    // Answered, so never "loading" forever (an adapter error arrives this way): the value stays.
+    assert.equal(rows[0].loading, false);
+    assert.equal(rows[0].value, '[1, 2]');
+  }],
+  ['pane: an empty container finishes loading and says it is empty', () => {
+    const rows = paneModel({
+      label: 'f',
+      value: { line: '()', atEntry: false, args: [{ name: 'items', value: '[]', ref: 11 }] },
+      expanded: new Set(['args/items']),
+      children: new Map([[11, { ref: 11, children: [] }]]),
+    }).sections[0].rows;
+    assert.equal(rows[0].loading, false);
+    assert.equal(rows[0].value, '[]');
+    assert.deepEqual(rows.slice(1).map(r => [r.name, r.note]), [['(empty)', true]]);
+  }],
+  ['pane: a row left open across a pause asks for its children under the new reference', () => {
+    class FakeElement {
+      style = {}; dataset = {}; classList = { toggle() { /* unused */ } }; ownerDocument = fakeDocument;
+      className = ''; textContent = ''; children: FakeElement[] = [];
+      handlers: Record<string, () => void> = {};
+      appendChild(child: FakeElement) { this.children.push(child); return child; }
+      replaceChildren() { this.children = []; }
+      setAttribute() { /* unused */ }
+      addEventListener(type: string, handler: () => void) { this.handlers[type] = handler; }
+    }
+    const fakeDocument = { createElement: () => new FakeElement() };
+    const find = (element: FakeElement, className: string): FakeElement | undefined =>
+      element.className === className ? element
+        : element.children.map(child => find(child, className)).find(Boolean);
+    const host = new FakeElement();
+    const requested: number[] = [];
+    const pane = new VariablePane(host as unknown as HTMLElement, new FakeElement() as unknown as HTMLElement,
+      { requestChildren: ref => requested.push(ref) });
+    const at = (ref: number) => ({
+      label: 'f',
+      value: { line: '()', atEntry: false, args: [{ name: 'items', value: '[1]', ref }] },
+      children: new Map<number, VariableChildren>(),
+    });
+    pane.update(at(11));
+    assert.deepEqual(requested, []); // collapsed: nothing to fetch
+    find(host, 'pane-twisty')!.handlers.click();
+    assert.deepEqual(requested, [11]);
+    pane.update(at(27)); // stepped: same row still open, a new reference, an emptied cache
+    assert.deepEqual(requested.at(-1), 27);
   }],
   ['pane: messages replace the sections when there is nothing honest to show', () => {
     assert.match(paneModel({ expanded: new Set(), children: new Map() }).message!, /Click a function/);
