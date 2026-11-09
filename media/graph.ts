@@ -1607,6 +1607,7 @@ export function initializeGraphWebview(): void {
       pathGraph = message.graph;
       rebuildPaths();
       // variable history: node labels come from the graph, so re-render the timeline onto it.
+      variablePane.labelsChanged();
       refreshWatch();
       return;
     }

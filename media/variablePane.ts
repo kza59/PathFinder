@@ -244,6 +244,7 @@ export class VariablePane {
   private cachedTimeline?: { steps: readonly HistoryStep[]; pinned: string; model: TimelineModel };
   /** The timeline is collapsed until opened; kept in memory, so it survives re-renders only. */
   private timelineOpen = false;
+  private timelineSummary?: HTMLElement;
   // --- end variable timeline ---
   // --- search by value ---
   private searchQuery = '';
@@ -303,8 +304,17 @@ export class VariablePane {
    * and the selection changes on its own - none of them should re-render the others' state away.
    */
   public setHistory(steps: readonly HistoryStep[]): void {
-    this.historySteps = [...steps];
+    if (steps === this.historySteps) {
+      return; // the same run: the caches below compare by identity, so keep it and skip the redraw
+    }
+    this.historySteps = steps;
     this.render();
+  }
+
+  /** The graph changed, so node names in the cached history and search rows may be out of date. */
+  public labelsChanged(): void {
+    this.cachedHistory = undefined;
+    this.cachedSearch = undefined;
   }
   // --- end variable history ---
 
@@ -387,9 +397,12 @@ export class VariablePane {
     this.host.replaceChildren();
     const doc = this.host.ownerDocument;
 
+    // The selected function's own variables come first: a long watch or history must never push
+    // the arguments and locals out of view.
+    this.renderInspector(model, doc);
     // --- watch variable ---
-    // First, and before the early return below: the watch follows the path, so it has something to
-    // say even when no function is selected and the inspector only has a message.
+    // Drawn whatever the inspector shows: the watch follows the path, so it has something to say
+    // even when no function is selected and the inspector only has a message.
     this.renderWatch(doc);
     // --- end watch variable ---
     // --- variable history ---
@@ -406,7 +419,10 @@ export class VariablePane {
     // disclosure to click open, and it costs nothing when the box is empty.
     this.renderSearch(doc);
     // --- end search by value ---
+  }
 
+  /** The arguments, locals and return value of the selected function, or its one-line message. */
+  private renderInspector(model: PaneModel, doc: Document): void {
     if (model.stale) {
       const note = this.host.appendChild(doc.createElement('p'));
       note.className = 'pane-stale';
@@ -573,13 +589,19 @@ export class VariablePane {
     summary.textContent = model.lanes.length
       ? `Variable timeline (${model.names} across ${model.steps} steps)`
       : 'Variable timeline';
-    summary.addEventListener('click', () => { this.timelineOpen = !this.timelineOpen; });
+    summary.addEventListener('click', event => {
+      event.preventDefault(); // render() sets the open state, and draws the grid when it opens
+      this.timelineOpen = !this.timelineOpen;
+      this.render();
+      this.timelineSummary?.focus(); // render() replaced the element the keyboard was on
+    });
+    this.timelineSummary = summary;
 
     const note = block.appendChild(doc.createElement('p'));
     note.className = 'pane-note';
     note.textContent = model.message ?? model.note ?? '';
-    if (model.message || !model.lanes.length) {
-      return model;
+    if (model.message || !model.lanes.length || !this.timelineOpen) {
+      return model; // closed: up to 24 x 80 cells nobody can see are not worth building
     }
 
     const grid = block.appendChild(doc.createElement('div'));

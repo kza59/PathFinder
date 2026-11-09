@@ -198,13 +198,16 @@ export function timelineModel(
       track.values[index] = resolved.value;
       // `previous` survives unrecorded steps on purpose: a gap we could not observe is no
       // evidence of a change, so the same value either side of one reads as held, not changed.
-      const was = previous.get(name);
-      const changed = was !== resolved.value;
+      // Kept per function: `n` in two functions is two variables that happen to share a lane. A
+      // first sighting has nothing to differ from, so it is not a change either.
+      const key = `${frames!.find(frame => frame.index.has(name))!.nodeId}\u0000${name}`;
+      const was = previous.get(key);
+      const changed = was !== undefined && was !== resolved.value;
       track.states[index] = changed ? 'changed' : 'same';
       if (changed) {
         track.changes++;
       }
-      previous.set(name, resolved.value);
+      previous.set(key, resolved.value);
     }
   });
 

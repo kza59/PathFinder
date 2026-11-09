@@ -83,7 +83,10 @@ class PaneEl {
   public appendChild(child: PaneEl): PaneEl { this.children.push(child); return child; }
   public replaceChildren(...next: PaneEl[]): void { this.children = next; }
   public setAttribute(name: string, value: string): void { this.attributes[name] = value; }
-  public addEventListener(_name: string, handler: () => void): void { this.clicks.push(handler); }
+  public addEventListener(_name: string, handler: (event: Event) => void): void {
+    this.clicks.push(() => handler({ preventDefault() {} } as Event));
+  }
+  public focus(): void {}
   /** Section headings, in render order. */
   public headings(): string[] {
     return this.children.flatMap(section =>
@@ -1505,7 +1508,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     ]);
     assert.deepEqual(model.names, ['acc', 'n']);
   }],
-  ['watch: the section renders above the inspector, with no selection, and keeps twisties open', () => {
+  ['watch: the section renders below the inspector, with no selection, and keeps twisties open', () => {
     const host = new PaneEl();
     const title = new PaneEl();
     const requested: number[] = [];
@@ -1526,14 +1529,14 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.deepEqual(paneRows(host.section('Watch')), [['main', '0', 'local'], ['add', '3', 'arg']]);
     assert.deepEqual(suggested.at(-1), ['total']); // the input's suggestion list follows the path
 
-    // With a selection, the watch comes FIRST and the inspector's own sections follow intact.
+    // With a selection, the inspector's own sections come FIRST, so a long watch can't bury them.
     pane.update({
       label: 'add',
       value: { line: '(items=[1])', atEntry: false, args: [{ name: 'items', value: '[1]', ref: 4 }] },
       children: new Map(),
     });
     assert.deepEqual(host.headings(),
-      ['Watch: total', 'History: total', 'Arguments', 'Local variables', 'Return value']);
+      ['Arguments', 'Local variables', 'Return value', 'Watch: total', 'History: total']);
 
     // Open the argument's twisty, then re-render the watch: the disclosure must stay open.
     const twisty = host.section('Arguments')!.children.find(child => child.className === 'pane-row')!
@@ -1712,10 +1715,10 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
       step({ n: '2', other: '9' }),
     ]);
     const lane = (name: string) => model.lanes.find(l => l.name === name)!;
-    assert.deepEqual(lane('n').cells.map(c => c.state), ['changed', 'same', 'unrecorded', 'changed']);
+    assert.deepEqual(lane('n').cells.map(c => c.state), ['same', 'same', 'unrecorded', 'changed']);
     // 'absent' (measured, not there) and 'unrecorded' (nothing measured) stay distinct.
-    assert.deepEqual(lane('other').cells.map(c => c.state), ['changed', 'absent', 'unrecorded', 'same']);
-    assert.equal(lane('n').changes, 2);
+    assert.deepEqual(lane('other').cells.map(c => c.state), ['same', 'absent', 'unrecorded', 'same']);
+    assert.equal(lane('n').changes, 1); // a first sighting has nothing to differ from
     assert.equal(lane('n').present, 3);
     assert.equal(model.bucket, 1);
     assert.equal(model.columns, 4);
@@ -1724,7 +1727,7 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     const states: CellState[] = ['changed', 'same', 'absent', 'unrecorded'];
     assert.deepEqual(states.map(cellGlyph), ['◆', '·', '', '?']);
     // Each cell says what it means in words, so shape is never the only channel.
-    assert.equal(cellLabel('n', lane('n').cells[0]), 'step 1 · n = 1 (changed)');
+    assert.equal(cellLabel('n', lane('n').cells[3]), 'step 4 · n = 2 (changed)');
     assert.equal(cellLabel('n', lane('n').cells[1]), 'step 2 · n = 1');
     assert.equal(cellLabel('other', lane('other').cells[1]), 'step 2 · other not in scope');
     assert.equal(cellLabel('n', lane('n').cells[2]), 'step 3 · no variables recorded');
@@ -1736,9 +1739,20 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     });
     // A gap we could not observe is no evidence of a change.
     const lane = timelineModel([at('1'), at(undefined), at('1'), at('2')]).lanes[0];
-    assert.deepEqual(lane.cells.map(c => c.state), ['changed', 'unrecorded', 'same', 'changed']);
-    assert.equal(lane.changes, 2);
+    assert.deepEqual(lane.cells.map(c => c.state), ['same', 'unrecorded', 'same', 'changed']);
+    assert.equal(lane.changes, 1);
     assert.equal(lane.origin, 'arg'); // it was a parameter every time
+  }],
+  ['timeline: the same name in two functions is not a change, and a constant has none', () => {
+    const at = (node: string, value: string): HistoryStep => ({
+      path: [node], reason: 'step', time: 0, session: 'Run',
+      values: { [node]: { args: [{ name: 'n', value }], locals: [] } },
+    });
+    const alternating = timelineModel([at('a', '1'), at('b', '2'), at('a', '1'), at('b', '2')]).lanes[0];
+    assert.equal(alternating.changes, 0);
+    assert.deepEqual(alternating.cells.map(c => c.state), ['same', 'same', 'same', 'same']);
+    // A real change inside one function still counts, with the other function between its steps.
+    assert.equal(timelineModel([at('a', '1'), at('b', '2'), at('a', '3')]).lanes[0].changes, 1);
   }],
   ['timeline: lanes rank by changes then presence, pinned first, and the cap is reported', () => {
     // 'busy' changes every step, 'calm' never, 'rare' appears once.
@@ -1792,13 +1806,13 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(model.steps, total);
     assert.match(model.note!, /each column = 4 steps/);
     const cells = model.lanes[0].cells;
-    // Only the first and the late bucket changed; everything between held.
-    assert.equal(cells[0].state, 'changed');
+    // Only the late bucket changed; everything before it held.
+    assert.equal(cells[0].state, 'same');
     assert.equal(cells[1].state, 'same');
     const changed = cells.filter(c => c.state === 'changed');
-    assert.equal(changed.length, 2);
+    assert.equal(changed.length, 1);
     // A bucket covers a range, and a click lands on the first CHANGED step inside it.
-    const late = changed[1];
+    const late = changed[0];
     assert.equal(late.target, changeAt);
     assert.ok(late.step <= changeAt && changeAt <= late.lastStep);
     assert.equal(late.value, 'late');
@@ -1870,17 +1884,22 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.match(closed.children[1].textContent, /No recorded session yet/);
 
     pane.setHistory([step({ n: '1' }), step({ n: '1' }), step(undefined), step({ n: '2' })]);
+    const collapsed = host.children.find(child => child.tag === 'details')!;
+    assert.equal(collapsed.children[0].textContent, 'Variable timeline (1 across 4 steps)');
+    // Closed, the grid is not built at all; opening it draws it.
+    assert.equal(collapsed.children.some(child => child.className === 'vtimeline-grid'), false);
+    collapsed.children[0].clicks[0]();
     const section = host.children.find(child => child.tag === 'details')!;
-    assert.equal(section.children[0].textContent, 'Variable timeline (1 across 4 steps)');
+    assert.equal(section.attributes.open, 'open');
     const lanes = section.children.find(child => child.className === 'vtimeline-grid')!.children;
     assert.equal(lanes.length, 1);
     assert.equal(lanes[0].children[0].textContent, 'n');
-    assert.match(lanes[0].children[0].title, /2 changes · present at 3 of 4 steps · local/);
+    assert.match(lanes[0].children[0].title, /1 change · present at 3 of 4 steps · local/);
 
     const cells = lanes[0].children[1].children;
-    assert.deepEqual(cells.map(c => c.dataset.state), ['changed', 'same', 'unrecorded', 'changed']);
+    assert.deepEqual(cells.map(c => c.dataset.state), ['same', 'same', 'unrecorded', 'changed']);
     // Shape differs per state, and every cell carries the state in words too.
-    assert.deepEqual(cells.map(c => c.textContent), ['◆', '·', '?', '◆']);
+    assert.deepEqual(cells.map(c => c.textContent), ['·', '·', '?', '◆']);
     assert.equal(cells[2].attributes['aria-label'], 'step 3 · no variables recorded');
     // Only cells with a step worth visiting are focusable controls.
     assert.deepEqual(cells.map(c => c.tag), ['button', 'button', 'span', 'button']);
@@ -1891,9 +1910,38 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(cells[2].clicks.length, 0);
 
     // Opening is remembered across re-renders (in memory, by design).
-    section.children[0].clicks[0]();
     pane.setWatch('n', []);
     assert.equal(host.children.find(child => child.tag === 'details')!.attributes.open, 'open');
+  }],
+  ['pane: the same run keeps its caches, and a new graph refreshes the node names', () => {
+    let labelCalls = 0;
+    const pane = new VariablePane(new PaneEl() as unknown as HTMLElement, new PaneEl() as unknown as HTMLElement, {
+      requestChildren: () => {},
+      labelOf: id => { labelCalls++; return id; },
+    });
+    const steps: HistoryStep[] = [{
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 'n', value: '1' }], locals: [] } },
+    }];
+    pane.setWatch('n', []);
+    pane.setHistory(steps);
+    const built = labelCalls;
+    assert.ok(built > 0);
+    // What every path change does: same array again, so nothing is recomputed.
+    pane.setHistory(steps);
+    pane.setWatch('n', []);
+    assert.equal(labelCalls, built);
+    pane.labelsChanged();
+    pane.setWatch('n', []);
+    assert.ok(labelCalls > built);
+  }],
+  ['search: no hits says when a capped value could have hidden one', () => {
+    const steps = (value: string): HistoryStep[] => [{
+      path: ['f'], reason: 'step', time: 0, session: 'Run',
+      values: { f: { args: [{ name: 's', value }], locals: [] } },
+    }];
+    assert.match(searchByValue('b'.repeat(100), steps(`'${'a'.repeat(78)}…`)).note!, /capped at 80 characters/);
+    assert.doesNotMatch(searchByValue('nope', steps("'short'")).note!, /capped/);
   }],
   ['timeline: the history and timeline models are reused until the run or the name changes', () => {
     const host = new PaneEl();

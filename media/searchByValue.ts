@@ -247,7 +247,9 @@ function searchNote(
   }
   if (!variables) {
     const scope = contains ? '' : ' Try "contains" for values inside lists and objects.';
-    return `${query} was not held by any recorded variable.${scope}`;
+    // No hits is exactly when a capped value could have been hiding one.
+    const cut = truncated ? ' Long values were capped at 80 characters, so it may be in one of those.' : '';
+    return `${query} was not held by any recorded variable.${cut}${scope}`;
   }
   const where = `${variables} ${variables === 1 ? 'variable' : 'variables'}`;
   const when = `${steps} of ${total} recorded ${total === 1 ? 'step' : 'steps'}`;
