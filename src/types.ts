@@ -28,6 +28,13 @@ export interface CallValue {
   atEntry: boolean;  // paused on the first body line: values are as passed (otherwise "value at pause")
   more?: number;     // further (outer, recursive) calls of the same function on the stack
   stale?: boolean;   // the program has resumed since these were read
+  // --- local variables feature ---
+  // The non-parameter locals of the same frame. All three are ABSENT (not empty) when the frame has
+  // none, so a call with only parameters serialises exactly as it did before this feature existed.
+  localsRows?: string[];  // shortened "name=value" rows for the band under the node, already capped
+  locals?: CallArg[];     // the first MAX_LOCALS_LIST locals, full values, for the tooltip
+  localsCount?: number;   // how many there are in total, so both views can say "+N more"
+  // --- end local variables feature ---
 }
 /** Keyed by graph node id; only nodes on the stack at the last pause are present. */
 export type CallValues = Record<string, CallValue>;

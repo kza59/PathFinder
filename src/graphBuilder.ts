@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { makeNodeId, MODULE_NAME, normalizePath } from './nodeId';
+import { definitionKey, makeNodeId, MODULE_NAME, normalizePath } from './nodeId';
 import { DEFAULT_MAX_DEPTH, DEFAULT_MAX_NODES } from './limits';
 import { markChokepoints } from './chokepoints';
 import { markRecursion } from './recursion';
@@ -68,8 +68,13 @@ function inWorkspace(uri: vscode.Uri): boolean {
   return uri.scheme === 'file' && vscode.workspace.getWorkspaceFolder(uri) !== undefined;
 }
 
+/** Top-level code is reported as the file/module symbol rather than as a function. */
+function isModuleItem(item: vscode.CallHierarchyItem): boolean {
+  return item.kind === vscode.SymbolKind.File || item.kind === vscode.SymbolKind.Module;
+}
+
 function locationKey(item: vscode.CallHierarchyItem): string {
-  return `${item.uri.toString()}#${item.selectionRange.start.line}`;
+  return definitionKey(item.uri.toString(), item.selectionRange.start.line, isModuleItem(item));
 }
 
 function escapeRegExp(text: string): string {
@@ -385,7 +390,9 @@ class GraphBuilder {
   seed(graph: CallGraph) {
     for (const { recursionGroup: _group, chokepoint: _chokepoint, ...node } of graph.nodes) {
       this.nodes.set(node.id, { ...node });
-      this.idByLocation.set(`${vscode.Uri.file(node.file).toString()}#${node.line - 1}`, node.id);
+      // Same key shape as locationKey(), so a seeded graph recognises the same definitions.
+      this.idByLocation.set(
+        definitionKey(vscode.Uri.file(node.file).toString(), node.line - 1, node.label === MODULE_NAME), node.id);
     }
     for (const { recursive: _recursive, ...edge } of graph.edges) {
       this.edges.set(`${edge.from}->${edge.to}`, { ...edge, lines: [...edge.lines] });
