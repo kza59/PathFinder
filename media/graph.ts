@@ -1,6 +1,7 @@
 import cytoscape, { type Core, type ElementDefinition, type NodeSingular, type StylesheetJson } from 'cytoscape';
 import { ExploreLayout } from './exploreLayout';
 import { GraphSearch, type SearchState } from './graphSearch';
+import { NodeLocals, nodeLocalsData } from './nodeLocals'; // local variables feature
 import { NodePills } from './nodePills';
 import { PathNavigation } from './pathNavigation';
 import { TruncationMarkers } from './truncationMarkers';
@@ -235,6 +236,7 @@ export class GraphRenderer {
   public setCallValues(values: CallValues): void {
     this.callValues = { ...values };
     this.applyCallValues();
+    this.applyCallLocals(); // local variables feature
   }
 
   private applyCallValues(): void {
@@ -248,6 +250,24 @@ export class GraphRenderer {
     }));
   }
   // --- end call values feature ---
+
+  // --- local variables feature ---
+  /**
+   * Publishes each node's locals band as node data for the NodeLocals overlay to pick up (it
+   * re-renders on Cytoscape's `data` event). Deliberately NOT part of the label: the node box is
+   * full, and media/graph.test.ts pins the label to the name plus the arguments line.
+   */
+  private applyCallLocals(): void {
+    this.cy.batch(() => this.cy.nodes().forEach(node => {
+      const data = nodeLocalsData(this.callValue(node.id()));
+      if (data) {
+        node.data('callLocals', data).addClass('has-locals');
+      } else {
+        node.removeData('callLocals').removeClass('has-locals');
+      }
+    }));
+  }
+  // --- end local variables feature ---
   // --- breakpoint markers ---
   private breakpoints: BreakpointCounts = {};
 
@@ -409,6 +429,7 @@ export class GraphRenderer {
     this.staticPositions = new Map(this.cy.nodes().map(node => [node.id(), { ...node.position() }]));
     if (this.mode === 'explore') this.applyLayoutMode();
     this.applyCallValues(); // call values feature
+    this.applyCallLocals(); // local variables feature
     this.applyBreakpoints(); // breakpoint markers
     this.highlightPath(this.path);
     this.applyHotCounts();
@@ -640,6 +661,7 @@ export function initializeGraphWebview(): void {
   const truncationMarkers = new TruncationMarkers(cy, document.getElementById('truncation-markers')!,
     message => vscode.postMessage(message));
   const nodePills = new NodePills(cy, document.getElementById('node-pills')!);
+  const nodeLocals = new NodeLocals(cy, document.getElementById('node-locals')!); // local variables feature
 
   const renderSuggestions = (state: SearchState) => {
     searchResults.replaceChildren();
@@ -849,6 +871,35 @@ export function initializeGraphWebview(): void {
     }
   };
   // --- end call values feature ---
+  // --- local variables feature ---
+  // Its own section under the arguments, so the two never run together and the node's three-row
+  // band stays a preview of this full list.
+  const tooltipLocals = tooltip.appendChild(document.createElement('div'));
+  tooltipLocals.className = 'tooltip-locals';
+  const renderTooltipLocals = (value: CallValue | undefined) => {
+    tooltipLocals.replaceChildren();
+    const locals = value?.locals;
+    tooltipLocals.hidden = !locals?.length;
+    if (!locals?.length) {
+      return;
+    }
+    tooltipLocals.classList.toggle('stale', value?.stale === true);
+    const heading = tooltipLocals.appendChild(document.createElement('div'));
+    heading.className = 'tooltip-locals-heading';
+    heading.textContent = 'Local variables (value at pause)';
+    for (const local of locals) {
+      const row = tooltipLocals.appendChild(document.createElement('div'));
+      row.className = 'tooltip-local';
+      row.textContent = `${local.name} = ${local.value}`;
+    }
+    const hidden = (value?.localsCount ?? locals.length) - locals.length;
+    if (hidden > 0) {
+      const note = tooltipLocals.appendChild(document.createElement('div'));
+      note.className = 'tooltip-lines';
+      note.textContent = `+${hidden} more not shown`;
+    }
+  };
+  // --- end local variables feature ---
   // --- breakpoint markers ---
   const tooltipBreakpoints = tooltip.appendChild(document.createElement('div'));
   // --- end breakpoint markers ---
@@ -914,6 +965,7 @@ export function initializeGraphWebview(): void {
     const callees = element.outgoers('node').length;
     tooltipConnections.textContent = `${callers} ${callers === 1 ? 'caller' : 'callers'} · ${callees} ${callees === 1 ? 'callee' : 'callees'}`;
     renderTooltipArgs(renderer.callValue(node.id)); // call values feature
+    renderTooltipLocals(renderer.callValue(node.id)); // local variables feature
     // --- breakpoint markers ---
     const breakpoints = renderer.breakpointCount(node.id);
     tooltipBreakpoints.hidden = breakpoints === 0;
@@ -1152,6 +1204,7 @@ export function initializeGraphWebview(): void {
   window.addEventListener('unload', () => {
     navigation.dispose();
     nodePills.dispose();
+    nodeLocals.dispose(); // local variables feature
     truncationMarkers.dispose();
     if (outlineFrame !== undefined) cancelAnimationFrame(outlineFrame);
     cy.off('viewport resize position add remove style', scheduleRecursionOutlines);

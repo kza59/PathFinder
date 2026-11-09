@@ -1,6 +1,6 @@
 // Unit tests for the call values feature (src/callValues.ts). Plain Node, no VS Code: part of `npm run test:unit`.
 import * as assert from 'assert';
-import { CallValuesCapture, formatCallValue, parseSignature, pickLocalsScope, shortenValue, type CallValuesDeps } from '../callValues';
+import { CallValuesCapture, formatCallLocals, formatCallValue, isLocalsScope, isPseudoLocal, parseSignature, pickLocalsScope, shortenValue, type CallValuesDeps } from '../callValues';
 import type { CallValues } from '../types';
 
 const names = (source: string, line = 1) => parseSignature(source.split('\n'), line)?.params.map(p => p.name);
@@ -140,6 +140,109 @@ const cases: [string, () => void | Promise<void>][] = [
     await settle();
     assert.deepStrictEqual(published.at(-1), {});
   }],
+  // --- local variables feature ---
+  ['the rows debugpy adds to Locals are not locals, but a single-underscore name is', () => {
+    // Every name here was observed over DAP against debugpy 1.8.20, or comes from its source.
+    for (const name of ['special variables', 'protected variables', 'function variables',
+      'class variables', '(return) add', 'len()', 'Unable to handle:', '_pydev_stop_at_break',
+      '__name__', '__dunderish__']) {
+      assert.strictEqual(isPseudoLocal(name), true, name);
+    }
+    // `protected` presents inline by default, so these arrive as ordinary rows and ARE real locals.
+    for (const name of ['_private', '_', 'total', 'items', 'x__', 'special']) {
+      assert.strictEqual(isPseudoLocal(name), false, name);
+    }
+  }],
+  ['locals are the complement of the signature: pseudo rows dropped, rows and list capped', () => {
+    const sig = parseSignature(['def f(a, b):', '    pass'], 1)!;
+    const extras = formatCallLocals(sig, locals({
+      a: '1', b: '2',                                                    // parameters are not locals
+      'special variables': '', '(return) f': '7', __name__: "'__main__'", // nor are these
+      total: '3', items: '[1, 2, 3]', text: `'${'x'.repeat(40)}'`, flag: 'True', _p: '0',
+    }))!;
+    // The node's rows lead with the scalars, alphabetical within each group; the list container
+    // drops to the back so it cannot crowd a readable value out behind "+N more".
+    assert.deepStrictEqual(extras.localsRows,
+      ['total=3', "text='xxxxxxxxxxxxxx…", 'flag=True', '_p=0', 'items=[1, 2, 3]']);
+    assert.strictEqual(extras.localsCount, 5); // total, items, text, flag, _p
+    // The tooltip keeps debugpy's own order, untouched by the node's reordering.
+    assert.deepStrictEqual(extras.locals.map(local => local.name), ['total', 'items', 'text', 'flag', '_p']);
+    assert.strictEqual(extras.locals[2].value, `'${'x'.repeat(40)}'`); // the tooltip keeps the value
+  }],
+  ['a long row is capped, a long list is capped, and a parameters-only frame has no locals at all', () => {
+    const sig = parseSignature(['def f(a):', '    pass'], 1)!;
+    const long = formatCallLocals(sig, locals({ [`v${'e'.repeat(40)}`]: '[1, 2, 3, 4, 5, 6, 7, 8]' }))!;
+    assert.ok(long.localsRows[0].length === 34 && long.localsRows[0].endsWith('…'), long.localsRows[0]);
+    const many = formatCallLocals(sig, locals(Object.fromEntries(
+      Array.from({ length: 25 }, (_, i) => [`v${i}`, String(i)]))))!;
+    assert.strictEqual(many.localsRows.length, 5);
+    assert.strictEqual(many.locals.length, 20); // bounds the callValues message
+    assert.strictEqual(many.localsCount, 25);
+    // undefined, not an empty result: a parameters-only CallValue stays exactly what it always was.
+    assert.strictEqual(formatCallLocals(sig, locals({ a: '1', 'special variables': '' })), undefined);
+  }],
+  ['node rows lead with scalars, containers and objects fall to the back', () => {
+    const sig = parseSignature(['def f(a):', '    pass'], 1)!;
+    const rows = (entries: Record<string, string>) =>
+      formatCallLocals(sig, locals(entries))!.localsRows.map(row => row.split('=')[0]);
+    // Alphabetical in; scalars come out first, each group still alphabetical among itself.
+    assert.deepStrictEqual(rows({
+      bag: '{1, 2}', count: '7', dog: '<__main__.Dog object at 0x1>', empty: 'None',
+      items: '[1, 2, 3]', name: "'ada'", ok: 'True', pair: '(9,)', ratio: '3.14',
+    }), ['count', 'empty', 'name', 'ok', 'ratio']);
+    // Float specials, bytes and negatives are scalars; a function object is not.
+    assert.deepStrictEqual(rows({
+      a_fn: '<function helper at 0x1>', b_inf: 'inf', c_bytes: "b'hi'", d_neg: '-3', e_nan: 'nan',
+    }), ['b_inf', 'c_bytes', 'd_neg', 'e_nan', 'a_fn']);
+    // Containers still fill the rows that the scalars leave free.
+    assert.deepStrictEqual(rows({ a_list: '[1]', b_num: '2', c_dict: '{}' }), ['b_num', 'a_list', 'c_dict']);
+  }],
+  ['scope trust: the hint or the exact name, never the fallback', () => {
+    assert.strictEqual(isLocalsScope({ name: 'Locals', variablesReference: 2 }), true);
+    assert.strictEqual(isLocalsScope({ name: 'locals', variablesReference: 2 }), true);
+    assert.strictEqual(isLocalsScope({ name: 'Frame', variablesReference: 2, presentationHint: 'locals' }), true);
+    assert.strictEqual(isLocalsScope({ name: 'Frame', variablesReference: 2 }), false);
+    assert.strictEqual(isLocalsScope({ name: 'Local variables', variablesReference: 2 }), false);
+    // The fallback still selects it, so arguments keep working on adapters that name it otherwise.
+    assert.strictEqual(pickLocalsScope([{ name: 'Frame', variablesReference: 2 }])?.variablesReference, 2);
+  }],
+  ['capture: locals ride along with the arguments of the same pause', async () => {
+    const { capture, published, requests } = fakeCapture({ 'main.py': MAIN },
+      { 1: { n: '2', acc: '6', 'special variables': '' } });
+    capture.paused();
+    capture.framesChanged([frame(1, 8)]);
+    await settle();
+    const value = published.at(-1)!.fact;
+    assert.strictEqual(value.line, '(n=2)'); // the arguments line is untouched by the locals
+    assert.deepStrictEqual(value.args, [{ name: 'n', value: '2' }]);
+    assert.deepStrictEqual(value.localsRows, ['acc=6']);
+    assert.deepStrictEqual(value.locals, [{ name: 'acc', value: '6' }]);
+    assert.strictEqual(value.localsCount, 1);
+    assert.strictEqual(requests(), 2); // still one scopes + one variables: no extra DAP traffic
+    capture.resumed();
+    assert.strictEqual(published.at(-1)!.fact.stale, true);
+    assert.deepStrictEqual(published.at(-1)!.fact.localsRows, ['acc=6']); // survive the stale marking
+  }],
+  ['capture: a guessed scope still yields arguments but never locals', async () => {
+    const published: CallValues[] = [];
+    const capture = new CallValuesCapture({
+      debounceMs: 0,
+      // No "Locals" name and no presentationHint: pickLocalsScope reaches its fallback.
+      request: async (command: string) => command === 'scopes'
+        ? { scopes: [{ name: 'Frame 0', variablesReference: 7 }] }
+        : { variables: [{ name: 'n', value: '5' }, { name: 'acc', value: '9' }] },
+      resolveNode: () => ({ id: 'fact', label: 'fact', file: 'main.py', line: 5 }),
+      readLines: () => MAIN.split('\n'),
+      publish: values => published.push(values),
+    } as CallValuesDeps);
+    capture.paused();
+    capture.framesChanged([frame(1, 8)]);
+    await settle();
+    assert.deepStrictEqual(published.at(-1), {
+      fact: { line: '(n=5)', args: [{ name: 'n', value: '5' }], atEntry: false },
+    });
+  }],
+  // --- end local variables feature ---
 ];
 
 void (async () => {
