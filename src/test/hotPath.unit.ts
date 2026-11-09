@@ -1,6 +1,10 @@
 // Unit tests for mapHotCounts. Plain Node, no VS Code: `npm run test:unit`.
 // Added with the return values feature, which rides the hot-path channel.
 import * as assert from 'assert';
+import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { mapHotCounts, type HotFunction } from '../hotPathMap';
 import type { GraphData } from '../types';
 
@@ -51,6 +55,43 @@ const cases: [string, () => void][] = [
     assert.deepStrictEqual(returns, {});
     assert.strictEqual(unmatched.length, 1);
     assert.deepStrictEqual(mapHotCounts([fn({ ret: '1', retSeq: 1 })], undefined).returns, {});
+  }],
+  ['the hook keeps the last return of a recursion and of a tight loop', () => {
+    // Runs the real sitecustomize.py, which needs Python 3.12+ for sys.monitoring.
+    if (spawnSync('python3', ['-c', 'import sys; sys.exit(sys.version_info < (3, 12))']).status !== 0) {
+      console.log('  SKIP  python3 3.12+ not found');
+      return;
+    }
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pathfinder-ret-')));
+    try {
+      const out = path.join(dir, 'out');
+      fs.writeFileSync(path.join(dir, 'prog.py'), [
+        'def fact(n):',
+        '    return 1 if n <= 1 else n * fact(n - 1)',
+        'def add(a, b):',
+        '    return a + b',
+        'fact(5)',
+        'for i in range(1000):',
+        '    add(i, 1)',
+      ].join('\n'));
+      const run = spawnSync('python3', ['prog.py'], {
+        cwd: dir,
+        env: {
+          ...process.env,
+          PYTHONPATH: path.join(__dirname, '..', '..', 'python', 'pathfinder_hot'),
+          PATHFINDER_HOT_DIR: out,
+          PATHFINDER_HOT_ROOTS: dir,
+        },
+      });
+      assert.strictEqual(run.status, 0, String(run.stderr));
+      const [file] = fs.readdirSync(out);
+      const { functions } = JSON.parse(fs.readFileSync(path.join(out, file), 'utf8')) as { functions: HotFunction[] };
+      const ret = (name: string) => functions.find(fn => fn.qualname === name)?.ret;
+      assert.strictEqual(ret('fact'), '120');
+      assert.strictEqual(ret('add'), '1000');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }],
   // --- end return values feature ---
 ];

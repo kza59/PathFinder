@@ -109,14 +109,17 @@ def _install(out_dir, roots_env):
     # builtin repr, short builtin containers element-wise through this same function, and anything
     # else becomes "<ClassName>". A str/int subclass is NOT an exact match, so it takes the
     # "<ClassName>" path too - deliberately, since its __repr__ would be user code.
-    _RET_THROTTLE = 0.05   # seconds between captures of one function; only the latest is kept
+    #
+    # Every return is captured, with no time-based throttle: the value worth showing is the LAST
+    # one (the outermost return of a recursion, the final iteration of a loop), and a throttle
+    # keeps the first of a burst instead. What keeps this cheap is that fmt's work is bounded: long
+    # strings are cut before repr, and containers stop at _RET_ITEMS elements and _RET_DEPTH levels.
     _RET_MAX = 120         # characters stored per value
     _RET_ITEMS = 6         # elements rendered per container
     _RET_DEPTH = 2         # nesting levels rendered element-wise
     _SCALARS = frozenset((type(None), bool, int, float, complex, str, bytes))
 
     rets = {}      # id(code) -> (seq, text)
-    ret_at = {}    # id(code) -> time.monotonic() of the last capture, for the throttle
     ret_seq = [0]  # a lost increment here only perturbs tie-breaking, so no lock is needed
 
     def clip(text):
@@ -125,6 +128,8 @@ def _install(out_dir, roots_env):
     def fmt(value, depth=0):
         kind = type(value)
         if kind in _SCALARS:
+            if (kind is str or kind is bytes) and len(value) > _RET_MAX:
+                value = value[:_RET_MAX]  # so a huge string costs no more than a short one
             return clip(repr(value))  # builtin types only: a C-level repr, no Python frames
         if depth < _RET_DEPTH and kind in (list, tuple, set, frozenset, dict):
             items = []
@@ -154,15 +159,11 @@ def _install(out_dir, roots_env):
                 if not wanted(code):
                     return DISABLE
                 codes[key] = code
-            now = time.monotonic()
-            if now - ret_at.get(key, 0.0) < _RET_THROTTLE:
-                return
             local.busy = True
             try:
                 text = fmt(retval)
             finally:
                 local.busy = False
-            ret_at[key] = now
             ret_seq[0] += 1
             rets[key] = (ret_seq[0], text)
         except Exception:

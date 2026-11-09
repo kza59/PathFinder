@@ -1133,11 +1133,21 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
     assert.equal(cy.$id('t').hasClass('has-return'), false);
     assert.equal(renderer.returnValue('a'), '7');
     assert.equal(renderer.returnValue('t'), undefined);
-    // Paired with the args line when both are present, and both survive a re-render.
-    renderer.setCallValues({ a: { line: '(x=3)', args: [{ name: 'x', value: '3' }], atEntry: false } });
+    // Live pause: that call has not returned, so the value is from an earlier one and says so.
+    const args = { line: '(x=3)', args: [{ name: 'x', value: '3' }], atEntry: false };
+    renderer.setCallValues({ a: args });
+    assert.equal(label('a'), 'a\n(x=3)\nlast → 7');
+    // Resumed, and the function has only ever been called once: now they are one call.
+    renderer.setHotCounts({ a: 1 });
+    renderer.setCallValues({ a: { ...args, stale: true } });
     assert.equal(label('a'), 'a\n(x=3) → 7');
     renderer.renderGraph(fixture);
     assert.equal(label('a'), 'a\n(x=3) → 7');
+    // Called again: the return may be from a later call than the args, so no pairing.
+    renderer.setHotCounts({ a: 2 });
+    renderer.setReturnValues({ a: '7' });
+    assert.equal(label('a'), 'a\n(x=3)\nlast → 7');
+    renderer.setHotCounts({ a: 1 });
     // A long value is shortened for the node; the full one stays available.
     renderer.setReturnValues({ a: `[${Array.from({ length: 40 }, (_, i) => i).join(', ')}]` });
     const shortened = label('a').split('\n')[2];
@@ -1152,19 +1162,19 @@ const cases: [string, (cy: Core, renderer: GraphRenderer) => void | Promise<void
   // --- argument vs return feature ---
   ['arguments and the return value share a line until the pair gets too long', () => {
     // One statement when it fits: this is the whole point of the pairing.
-    assert.deepEqual(flowLines('(a=3, b=4)', '→ 7'), ['(a=3, b=4) → 7']);
+    assert.deepEqual(flowLines('(a=3, b=4)', '→ 7', true), ['(a=3, b=4) → 7']);
+    // From different calls they are never joined, however short.
+    assert.deepEqual(flowLines('(a=1, b=1)', '→ 0', false), ['(a=1, b=1)', 'last → 0']);
     // Exactly at the cap, then one character over: the pair falls back to the two lines it was.
     const at = '(abcdefghijklmnopqrst)'; // 22 + ' ' + '→ 7' (3) = 26
     assert.equal(`${at} → 7`.length, 26);
-    assert.deepEqual(flowLines(at, '→ 7'), [`${at} → 7`]);
+    assert.deepEqual(flowLines(at, '→ 7', true), [`${at} → 7`]);
     const over = `${at}x`;
-    assert.deepEqual(flowLines(over, '→ 7'), [over, '→ 7']);
+    assert.deepEqual(flowLines(over, '→ 7', true), [over, '→ 7']);
     // Either one alone is unchanged, and a node with neither contributes no lines.
-    assert.deepEqual(flowLines('(a=3, b=4)', undefined), ['(a=3, b=4)']);
-    assert.deepEqual(flowLines(undefined, '→ 7'), ['→ 7']);
-    assert.deepEqual(flowLines(undefined, undefined), []);
-    // The recursion suffix the args line can carry stays attached to the arguments.
-    assert.deepEqual(flowLines('(n=1) +3', '→ 1'), ['(n=1) +3 → 1']);
+    assert.deepEqual(flowLines('(a=3, b=4)', undefined, false), ['(a=3, b=4)']);
+    assert.deepEqual(flowLines(undefined, '→ 7', false), ['→ 7']);
+    assert.deepEqual(flowLines(undefined, undefined, false), []);
   }],
   // --- end argument vs return feature ---
 ];
