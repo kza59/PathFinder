@@ -45,13 +45,20 @@ export const layoutOptions = {
 
 // --- argument vs return feature ---
 // Arguments and the return value are captured by two unrelated mechanisms (a DAP pause and the
-// sys.monitoring hook), but on the node they describe one thing: what went in and what came out.
-// Joined on one line they read as that; the cap keeps the pair inside roughly one rendered line of
-// the node's 160px text box at 12px, so the arrow never ends up stranded at the start of a wrap.
+// sys.monitoring hook), so they only describe one call when sameCall says so (see applyCallPairing).
+// Joined on one line they read as "this went in, that came out"; the cap keeps the pair inside
+// roughly one rendered line of the node's 160px text box at 12px, so the arrow never ends up
+// stranded at the start of a wrap.
 const FLOW_JOIN_MAX = 26;
 
-/** "(a=3, b=4)" and "→ 7" as one line when they fit, else as the two lines they were. */
-export function flowLines(args: string | undefined, ret: string | undefined): string[] {
+/**
+ * "(a=3, b=4)" and "→ 7" as one line when they belong to one call and fit, else as two lines. From
+ * different calls they are never joined, and "last" says the value came from an earlier return.
+ */
+export function flowLines(args: string | undefined, ret: string | undefined, sameCall: boolean): string[] {
+  if (args && ret && !sameCall) {
+    return [args, `last ${ret}`];
+  }
   if (args && ret && `${args} ${ret}`.length <= FLOW_JOIN_MAX) {
     return [`${args} ${ret}`];
   }
@@ -62,7 +69,8 @@ export function flowLines(args: string | undefined, ret: string | undefined): st
 const nodeLabel = (node: NodeSingular): string => [
   `${node.hasClass('chokepoint') ? '◇ ' : ''}${node.data('label')}`,
   // call values feature (args) + return values feature (ret), paired by the argument vs return feature
-  ...flowLines(node.data('callArgs') as string | undefined, node.data('callReturn') as string | undefined),
+  ...flowLines(node.data('callArgs') as string | undefined, node.data('callReturn') as string | undefined,
+    node.data('callSameCall') === true),
 ].join('\n');
 
 export function graphStyles(foreground = '#d4d4d4', background = '#252526'): StylesheetJson {
@@ -282,7 +290,21 @@ export class GraphRenderer {
         node.removeData('callArgs').removeClass('has-args');
       }
     }));
+    this.applyCallPairing(); // argument vs return feature
   }
+
+  // --- argument vs return feature ---
+  /**
+   * The args and the return value can only be claimed to be one call when that call has finished
+   * (the args are stale, so a live pause isn't showing a call whose return doesn't exist yet) and
+   * it is the only call the function has made. Anything else risks pairing different calls.
+   */
+  private applyCallPairing(): void {
+    this.cy.batch(() => this.cy.nodes().forEach(node => {
+      node.data('callSameCall', this.callValue(node.id())?.stale === true && this.getHotCount(node.id()) === 1);
+    }));
+  }
+  // --- end argument vs return feature ---
   // --- end call values feature ---
 
   // --- local variables feature ---
@@ -504,6 +526,7 @@ export class GraphRenderer {
         node.data('callReturn', `→ ${shortenValue(value, MAX_RETURN)}`).addClass('has-return');
       }
     }));
+    this.applyCallPairing(); // argument vs return feature
   }
   // --- end return values feature ---
 
